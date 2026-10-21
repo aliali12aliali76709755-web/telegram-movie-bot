@@ -91,7 +91,7 @@ async def ensure_transferred(item, status_callback=None):
 
     return sent_msg.id
 
-@bot.on(events.NewMessage(pattern=r'^/start(?:\s+(.+))?'))
+@bot.on(events.NewMessage(pattern=r'^/start(?:\s+(.+))?', func=lambda e: e.is_private))
 async def start_handler(event):
     param = event.pattern_match.group(1)
     if param and param.startswith("movie_"):
@@ -118,7 +118,7 @@ async def start_handler(event):
     else:
         await event.reply(text)
 
-@bot.on(events.NewMessage)
+@bot.on(events.NewMessage(func=lambda e: e.is_private))
 async def search_handler(event):
     if event.text.startswith('/'):
         return
