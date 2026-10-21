@@ -1,5 +1,13 @@
-temp/
-__pycache__/
-*.log
+# Environment and secrets
+.env
 *.session
 *.session-journal
+*.db
+auth_data_*.json
+auth_hash_*.txt
+token.txt
+
+# Python cache
+__pycache__/
+*.pyc
+temp/

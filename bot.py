@@ -15,7 +15,13 @@ from database import (
 
 API_ID = 32374871
 API_HASH = "88bae070f4b4fb8f348eb6a16e8879d2"
-BOT_TOKEN = "8884645024:AAFgHszR26PgAWxL5TjUAc4Hbcl7-gUpM5A"
+TOKEN_FILE = os.path.join(os.path.dirname(__file__), "token.txt")
+if os.path.exists(TOKEN_FILE):
+    with open(TOKEN_FILE, "r", encoding="utf-8") as f:
+        BOT_TOKEN = f.read().strip()
+else:
+    BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+
 BOT_USERNAME = "@zxeeabot"
 STORAGE_CHANNEL = -1004477353424
 
