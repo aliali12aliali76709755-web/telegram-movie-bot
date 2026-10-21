@@ -314,106 +314,26 @@ async def deliver_movie_by_id(chat_id, movie_id, callback_event=None, reply_to=N
     title = item['clean_title'].replace('🎬', '').strip()
 
     if callback_event:
-        await callback_event.answer("⏳ جاري تجهيز الفيلم...")
+        await callback_event.answer("⏳ جاري إرسال الفيلم فوراً...")
 
-    has_cover = bool(item.get('has_custom_cover'))
-    target_msg_id = item.get('target_msg_id')
-
-    # Case 1: ALREADY CONVERTED (INSTANT DELIVERY IN 0.5s!)
-    if has_cover and target_msg_id:
-        try:
-            storage_msg = await bot.get_messages(STORAGE_CHANNEL, ids=target_msg_id)
-            if storage_msg and storage_msg.media:
-                await bot.send_file(
-                    chat_id,
-                    storage_msg.media,
-                    caption=caption,
-                    supports_streaming=True
-                )
-                return
-        except Exception as e:
-            print(f"Error sending already converted movie: {e}")
-
-    # Case 2: ON-DEMAND LIVE PROCESSING! (First time requested)
-    status_msg = await bot.send_message(
-        chat_id,
-        f"⏳ **جاري معالجة فيلم:** `{title}` ({mb} MB)\n"
-        f"🛡️ **تجهيز غلاف Trustpilot الحصري...**\n"
-        f"⚡ يستغرق لحظات قليلة لأول مرة فقط!",
-        reply_to=reply_to
-    )
-
-    async def update_status(text):
-        try:
-            await status_msg.edit(text)
-        except Exception:
-            pass
-
-    temp_file = None
-    storage_msg = None
     try:
-        current_target_id = await ensure_transferred(item, status_callback=update_status)
-        storage_msg = await bot.get_messages(STORAGE_CHANNEL, ids=current_target_id)
-        if not storage_msg or not storage_msg.media:
-            await update_status("⚠️ تعذر جلب ملف الفيلم.")
-            return
+        target_msg_id = item.get('target_msg_id')
+        if not target_msg_id:
+            target_msg_id = await ensure_transferred(item)
 
-        await update_status(f"⚡ جاري دمج غلاف Trustpilot لفيلم: `{title}`...")
-
-        temp_file = os.path.join(TEMP_DIR, f"temp_{movie_id}_{int(time.time())}.mp4")
-        await bot.download_media(storage_msg, file=temp_file)
-
-        attrs = []
-        if storage_msg.document and storage_msg.document.attributes:
-            for a in storage_msg.document.attributes:
-                if isinstance(a, DocumentAttributeVideo):
-                    attrs.append(DocumentAttributeVideo(
-                        duration=a.duration,
-                        w=a.w,
-                        h=a.h,
-                        supports_streaming=True
-                    ))
-        if not attrs:
-            attrs = [DocumentAttributeVideo(duration=5400, w=1280, h=720, supports_streaming=True)]
-
-        thumb_arg = THUMB_IMAGE_PATH if os.path.exists(THUMB_IMAGE_PATH) else None
-        new_storage_msg = await bot.send_file(
-            STORAGE_CHANNEL,
-            temp_file,
-            thumb=thumb_arg,
-            caption=caption,
-            attributes=attrs,
-            supports_streaming=True
-        )
-
-        conn = get_connection()
-        c = conn.cursor()
-        c.execute("UPDATE media_items SET target_msg_id = ?, has_custom_cover = 1 WHERE id = ?", (new_storage_msg.id, movie_id))
-        conn.commit()
-        conn.close()
-
-        await bot.send_file(
-            chat_id,
-            new_storage_msg.media,
-            caption=caption,
-            supports_streaming=True
-        )
-        await status_msg.delete()
-
+        storage_msg = await bot.get_messages(STORAGE_CHANNEL, ids=target_msg_id)
+        if storage_msg and storage_msg.media:
+            await bot.send_file(
+                chat_id,
+                storage_msg.media,
+                caption=caption,
+                supports_streaming=True
+            )
+        else:
+            await bot.send_message(chat_id, "⚠️ تعذر جلب ملف الفيلم من القناة الرئيسية.", reply_to=reply_to)
     except Exception as e:
-        print(f"On-demand processing error: {e}")
-        try:
-            if storage_msg and storage_msg.media:
-                await bot.send_file(chat_id, storage_msg.media, caption=caption, supports_streaming=True)
-                await status_msg.delete()
-        except Exception:
-            await update_status(f"⚠️ حدث خطأ أثناء تجهيز الفيلم: {e}")
-    finally:
-        if temp_file and os.path.exists(temp_file):
-            try:
-                os.remove(temp_file)
-            except Exception:
-                pass
+        print(f"Delivery error: {e}")
+        await bot.send_message(chat_id, f"⚠️ حدث خطأ أثناء إرسال الفيلم: {e}", reply_to=reply_to)
 
 @bot.on(events.CallbackQuery(pattern=r'^movie_(\d+)'))
 async def play_movie_handler(event):
