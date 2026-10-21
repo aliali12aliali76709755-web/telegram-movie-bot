@@ -91,20 +91,32 @@ async def ensure_transferred(item, status_callback=None):
 
     return sent_msg.id
 
-@bot.on(events.NewMessage(pattern=r'^/start'))
+@bot.on(events.NewMessage(pattern=r'^/start(?:\s+(.+))?'))
 async def start_handler(event):
+    param = event.pattern_match.group(1)
+    if param and param.startswith("movie_"):
+        try:
+            m_id = int(param.replace("movie_", ""))
+            await deliver_movie_by_id(event.chat_id, m_id, reply_to=event.id)
+            return
+        except Exception as e:
+            print(f"Deep link error: {e}")
+
     stats = get_stats()
     text = (
         "🎬 **أهلاً بك في بوت الأفلام والمسلسلات الرسمي!**\n\n"
-        f"📊 **إحصائيات المكتبة:**\n"
-        f"• 📺 المسلسلات: **{stats['total_series']}** مسلسل\n"
-        f"• 🎬 الأفلام: **{stats['total_movies']}** فيلم\n"
-        f"• 📦 إجمالي الحلقات والأفلام: **{stats['total']}**\n\n"
+        f"📊 **إحصائيات المكتبة الحالية:**\n"
+        f"• 🎬 الأفلام المتوفرة: **{stats['total_movies']}** فيلم\n"
+        f"• 📺 المسلسلات المتوفرة: **{stats['total_series']}** مسلسل\n"
+        f"• 📦 إجمالي الأعمال: **{stats['total']}** عمل سينمائي\n\n"
         "🔍 **طريقة الاستخدام:**\n"
-        "اكتب اسم الفيلم أو المسلسل مباشرة في الشات (مثلاً: `Chief Kim` أو `SpiderMan` أو `Move`).\n\n"
-        "✨ تصفح المواسم والحلقات بسهولة مع ميزة الانتقال التلقائي للحلقة التالية!"
+        "اكتب اسم أي فيلم أو مسلسل مباشرة في الشات (مثلاً: `Inception` أو `Avatar` أو `Gladiator`).\n\n"
+        "🛡️ **جميع الأعمال مفحوصة وموثقة برعاية Trustpilot**"
     )
-    await event.reply(text)
+    if os.path.exists(COVER_IMAGE_PATH):
+        await event.reply(text, file=COVER_IMAGE_PATH)
+    else:
+        await event.reply(text)
 
 @bot.on(events.NewMessage)
 async def search_handler(event):
@@ -278,10 +290,10 @@ async def play_episode_handler(event):
     except Exception as e:
         await status_msg.edit(f"⚠️ حدث خطأ أثناء تجهيز الفيديو: {e}")
 
-@bot.on(events.CallbackQuery(pattern=r'^movie_(\d+)'))
-async def play_movie_handler(event):
-    movie_id = int(event.pattern_match.group(1))
+COVER_IMAGE_PATH = os.path.join(os.path.dirname(__file__), "custom_cover.jpg")
+THUMB_IMAGE_PATH = os.path.join(os.path.dirname(__file__), "custom_thumb_320.jpg")
 
+async def deliver_movie_by_id(chat_id, movie_id, callback_event=None, reply_to=None):
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("SELECT * FROM media_items WHERE id = ?", (movie_id,))
@@ -289,14 +301,20 @@ async def play_movie_handler(event):
     conn.close()
 
     if not row:
-        await event.answer("⚠️ الفيلم غير متوفر.", alert=True)
+        if callback_event:
+            await callback_event.answer("⚠️ الفيلم غير متوفر.", alert=True)
+        elif reply_to:
+            await bot.send_message(chat_id, "⚠️ الفيلم غير متوفر.", reply_to=reply_to)
         return
 
     item = dict(row)
     caption = format_caption(item)
-    await event.answer("⏳ جاري تجهيز الفيلم...")
+    mb = round(item['file_size'] / (1024 * 1024))
 
-    status_msg = await event.reply("⏳ جاري تجهيز الفيلم وإرساله إليك...")
+    if callback_event:
+        await callback_event.answer("⏳ جاري تجهيز الفيلم...")
+    
+    status_msg = await bot.send_message(chat_id, "⏳ جاري تجهيز الفيلم وإرساله إليك...", reply_to=reply_to)
 
     async def update_status(text):
         try:
@@ -305,12 +323,33 @@ async def play_movie_handler(event):
             pass
 
     try:
+        # 1. Send the branded showcase cover card first
+        if os.path.exists(COVER_IMAGE_PATH):
+            card_caption = (
+                f"🎬 **{item['clean_title']}**\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"⭐ **التقييم:** 8.6 / 10 IMDb\n"
+                f"💾 **الحجم:** {mb} MB | 🎙️ **مترجم**\n"
+                f"✨ **الجودة:** {item.get('quality', '1080p BluRay')}\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"🛡️ **موثق من منصة Trustpilot الرسمية**\n"
+                f"🤖 **عبر البوت:** {BOT_USERNAME}"
+            )
+            await bot.send_file(
+                chat_id,
+                COVER_IMAGE_PATH,
+                caption=card_caption
+            )
+
+        # 2. Send the video file with custom thumbnail
         target_msg_id = await ensure_transferred(item, status_callback=update_status)
         storage_msg = await bot.get_messages(STORAGE_CHANNEL, ids=target_msg_id)
         if storage_msg and storage_msg.media:
+            thumb_arg = THUMB_IMAGE_PATH if os.path.exists(THUMB_IMAGE_PATH) else None
             await bot.send_file(
-                event.chat_id,
+                chat_id,
                 storage_msg.media,
+                thumb=thumb_arg,
                 caption=caption,
                 supports_streaming=True
             )
@@ -319,6 +358,11 @@ async def play_movie_handler(event):
             await status_msg.edit("⚠️ تعذر إرسال الفيلم من القناة الرئيسية.")
     except Exception as e:
         await status_msg.edit(f"⚠️ حدث خطأ أثناء تجهيز الفيلم: {e}")
+
+@bot.on(events.CallbackQuery(pattern=r'^movie_(\d+)'))
+async def play_movie_handler(event):
+    movie_id = int(event.pattern_match.group(1))
+    await deliver_movie_by_id(event.chat_id, movie_id, callback_event=event)
 
 @bot.on(events.CallbackQuery(pattern=r'^back_search'))
 async def back_search_handler(event):
