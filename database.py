@@ -46,6 +46,8 @@ def init_db():
         cursor.execute("ALTER TABLE media_items ADD COLUMN season_num INTEGER DEFAULT 1;")
     if 'episode_num' not in existing_cols:
         cursor.execute("ALTER TABLE media_items ADD COLUMN episode_num INTEGER DEFAULT 0;")
+    if 'has_custom_cover' not in existing_cols:
+        cursor.execute("ALTER TABLE media_items ADD COLUMN has_custom_cover INTEGER DEFAULT 0;")
 
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_title ON media_items(clean_title);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_series ON media_items(series_title, season_num, episode_num);")
