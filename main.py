@@ -11,18 +11,22 @@ sys.stdout.reconfigure(encoding='utf-8')
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path in ("/status", "/health"):
+            mongo_err = None
+            stats = {}
+            db_status = "unknown"
             try:
                 import database
                 stats = database.get_stats()
                 db_status = "connected"
             except Exception as e:
-                stats = {}
-                db_status = f"error: {e}"
+                db_status = "failed"
+                mongo_err = str(e)
 
             resp = {
                 "status": "online",
                 "service": "telegram_movie_bot",
                 "mongodb": db_status,
+                "mongo_error": mongo_err,
                 "stats": stats
             }
             body = json.dumps(resp, ensure_ascii=False).encode('utf-8')

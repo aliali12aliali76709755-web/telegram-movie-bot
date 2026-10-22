@@ -3,23 +3,25 @@ import os
 import re
 from datetime import datetime
 
-MONGO_URI = os.environ.get("MONGO_URI", "")
+DEFAULT_MONGO_URI = "mongodb+srv://bosshoeheoejossnpe_db_user:eQl1SyEvwIRDMs1w@cluster0.etprryl.mongodb.net/?retryWrites=true&w=majority"
 DB_PATH = os.path.join(os.path.dirname(__file__), "movies.db")
 
 _mongo_client = None
 
 def get_mongo_db():
     global _mongo_client
-    if not MONGO_URI:
+    mongo_uri = os.environ.get("MONGO_URI", "").strip() or DEFAULT_MONGO_URI
+    if not mongo_uri:
         return None
     if _mongo_client is None:
         try:
             from pymongo import MongoClient
-            _mongo_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+            _mongo_client = MongoClient(mongo_uri, serverSelectionTimeoutMS=7000)
             _mongo_client.admin.command('ping')
         except Exception as e:
             print(f"MongoDB connection notice: {e}")
-            return None
+            _mongo_client = None
+            raise e
     return _mongo_client['telegram_movie_bot']
 
 def get_connection():
