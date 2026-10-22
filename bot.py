@@ -6,6 +6,7 @@ import time
 sys.stdout.reconfigure(encoding='utf-8')
 import cryptg
 from telethon import TelegramClient, events, Button
+from telethon.sessions import StringSession
 from telethon.tl.types import DocumentAttributeVideo
 from database import (
     get_media_item_by_id, search_media, get_stats, 
@@ -32,7 +33,14 @@ BOT_SESSION_PATH = os.path.join(os.path.dirname(__file__), "bot_session")
 COVER_IMAGE_PATH = os.path.join(os.path.dirname(__file__), "custom_cover.jpg")
 THUMB_IMAGE_PATH = os.path.join(os.path.dirname(__file__), "custom_thumb_320.jpg")
 
-bot = TelegramClient(BOT_SESSION_PATH, API_ID, API_HASH, connection_retries=None, retry_delay=3)
+BOT_SESSION_STRING = os.environ.get("BOT_SESSION_STRING", "1BJWap1sBu73MXBBm5hAOnknucvIdyCJEzS5kI0w-MKFyau0x4_VazWUZjYgD6_IK8jkbiGHva3cU2O1lGaZdEcPasK9T-OJUui3ROV8fkHewAKAlAAzLmO47TCGQWhLs3xqe-GoMlWhwseInvaUI6aeMPl61WdZjB15rHfPcKVFhq4BqUR_S7Hb6h77SgdmRFGQkzHjAFp94ej7YAZf8vpZjbzgxr-s6UreVDSm7ay5XlO6pC0lUfBSVtoTCT-qOuCCEXkb8dsDfX1u_dzt3E443OM_N0LnUC-6DCw5YEaA3gxN1uIruO44ynr3OAO7kqT00cLh5g1ty-gqbwZ1_-tUtcjEDzUw=").strip()
+
+if BOT_SESSION_STRING:
+    session_target = StringSession(BOT_SESSION_STRING)
+else:
+    session_target = BOT_SESSION_PATH
+
+bot = TelegramClient(session_target, API_ID, API_HASH, connection_retries=None, retry_delay=3)
 
 SEASON_NAMES = {
     1: "الأول", 2: "الثاني", 3: "الثالث", 4: "الرابع",
@@ -604,7 +612,11 @@ async def main():
     while True:
         try:
             print("Starting Bot @zxeeabot...")
-            await bot.start(bot_token=BOT_TOKEN)
+            if not bot.is_connected():
+                await bot.connect()
+            if not await bot.is_user_authorized():
+                print("Bot not authorized, starting with token...")
+                await bot.start(bot_token=BOT_TOKEN)
             me = await bot.get_me()
             print(f"Bot @{me.username} ({me.first_name}) is LIVE and serving users with Admin Panel & Instant Search!")
 

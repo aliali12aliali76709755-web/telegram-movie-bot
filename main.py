@@ -22,9 +22,23 @@ class HealthHandler(BaseHTTPRequestHandler):
                 db_status = "failed"
                 mongo_err = str(e)
 
+            bot_status = "unknown"
+            bot_username = None
+            try:
+                from bot import bot
+                if bot and bot.is_connected():
+                    bot_status = "connected"
+                    bot_username = "@zxeeabot"
+                else:
+                    bot_status = "disconnected"
+            except Exception as b_err:
+                bot_status = f"error: {b_err}"
+
             resp = {
                 "status": "online",
                 "service": "telegram_movie_bot",
+                "bot": bot_status,
+                "bot_username": bot_username,
                 "mongodb": db_status,
                 "mongo_error": mongo_err,
                 "stats": stats
