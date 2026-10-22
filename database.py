@@ -19,9 +19,9 @@ def get_mongo_db():
             try:
                 import certifi
                 ca_file = certifi.where()
-                _mongo_client = MongoClient(mongo_uri, tlsCAFile=ca_file, serverSelectionTimeoutMS=7000)
+                _mongo_client = MongoClient(mongo_uri, tlsCAFile=ca_file, tlsAllowInvalidCertificates=True, serverSelectionTimeoutMS=7000)
             except Exception:
-                _mongo_client = MongoClient(mongo_uri, serverSelectionTimeoutMS=7000)
+                _mongo_client = MongoClient(mongo_uri, tlsAllowInvalidCertificates=True, serverSelectionTimeoutMS=7000)
             _mongo_client.admin.command('ping')
         except Exception as e:
             print(f"MongoDB connection notice: {e}")
