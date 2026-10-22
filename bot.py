@@ -573,7 +573,7 @@ async def deliver_movie_by_id(chat_id, movie_id, callback_event=None, reply_to=N
 
     try:
         target_msg_id = item.get('target_msg_id')
-        if not target_msg_id or target_msg_id > 3050:
+        if not target_msg_id or target_msg_id <= 0:
             if callback_event:
                 await callback_event.answer("⚠️ الفيلم قيد التجهيز والنقل، يرجى المحاولة بعد قليل.", alert=True)
             elif reply_to:

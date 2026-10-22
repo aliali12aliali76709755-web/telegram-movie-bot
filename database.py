@@ -402,9 +402,9 @@ def search_media(query: str, limit: int = 15):
                     })
                     seen_series.add(st)
 
-            # Search movies (valid target_msg_id <= 3050)
+            # Search movies (valid target_msg_id > 0)
             m_docs = list(col.find(
-                {'is_series': 0, 'clean_title': exact_reg, 'target_msg_id': {'$lte': 3050}},
+                {'is_series': 0, 'clean_title': exact_reg, 'target_msg_id': {'$gt': 0}},
                 {'id': 1, 'clean_title': 1, 'quality': 1, 'file_size': 1, 'duration': 1, 'target_msg_id': 1}
             ).sort('id', -1).limit(limit))
             for m in m_docs:
@@ -432,7 +432,7 @@ def search_media(query: str, limit: int = 15):
                         seen_series.add(st)
 
                 m_docs_and = list(col.find(
-                    {'is_series': 0, 'clean_title': and_reg, 'target_msg_id': {'$lte': 3050}},
+                    {'is_series': 0, 'clean_title': and_reg, 'target_msg_id': {'$gt': 0}},
                     {'id': 1, 'clean_title': 1, 'quality': 1, 'file_size': 1, 'duration': 1, 'target_msg_id': 1}
                 ).sort('id', -1).limit(limit))
                 for m in m_docs_and:
@@ -459,7 +459,7 @@ def search_media(query: str, limit: int = 15):
                                 })
                                 seen_series.add(st)
                         m_docs_single = list(col.find(
-                            {'is_series': 0, 'clean_title': single_reg, 'target_msg_id': {'$lte': 3050}},
+                            {'is_series': 0, 'clean_title': single_reg, 'target_msg_id': {'$gt': 0}},
                             {'id': 1, 'clean_title': 1, 'quality': 1, 'file_size': 1, 'duration': 1, 'target_msg_id': 1}
                         ).sort('id', -1).limit(limit))
                         for m in m_docs_single:
@@ -489,7 +489,7 @@ def search_media(query: str, limit: int = 15):
                         seen_series.add(st)
 
                 m_docs_sub = list(col.find(
-                    {'is_series': 0, 'clean_title': sub_reg, 'target_msg_id': {'$lte': 3050}},
+                    {'is_series': 0, 'clean_title': sub_reg, 'target_msg_id': {'$gt': 0}},
                     {'id': 1, 'clean_title': 1, 'quality': 1, 'file_size': 1, 'duration': 1, 'target_msg_id': 1}
                 ).sort('id', -1).limit(limit))
                 for m in m_docs_sub:
@@ -527,7 +527,7 @@ def search_media(query: str, limit: int = 15):
         cursor.execute("""
         SELECT id, clean_title, quality, file_size, duration, target_msg_id
         FROM media_items
-        WHERE is_series = 0 AND target_msg_id <= 3050 AND clean_title LIKE ?
+        WHERE is_series = 0 AND target_msg_id > 0 AND clean_title LIKE ?
         ORDER BY id DESC LIMIT ?
         """, (search_pattern, limit))
         for r in cursor.fetchall():
@@ -558,7 +558,7 @@ def search_media(query: str, limit: int = 15):
             cursor.execute(f"""
             SELECT id, clean_title, quality, file_size, duration, target_msg_id
             FROM media_items
-            WHERE is_series = 0 AND target_msg_id <= 3050 AND {where_movies}
+            WHERE is_series = 0 AND target_msg_id > 0 AND {where_movies}
             ORDER BY id DESC LIMIT ?
             """, params_movies)
             for r in cursor.fetchall():
