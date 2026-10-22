@@ -260,6 +260,7 @@ ARABIC_MAPPINGS = {
     'إنسيبشن': 'inception',
     'انترستيلر': 'interstellar',
     'إنترستيلار': 'interstellar',
+    'بين النجوم': 'interstellar',
     'فريندز': 'friends',
     'فريندس': 'friends',
     'شيرلوك': 'sherlock',
@@ -267,6 +268,7 @@ ARABIC_MAPPINGS = {
     'سكويد جيم': 'squid game',
     'لعبة الحبار': 'squid game',
     'لا كاسا دي بابيل': 'la casa de papel',
+    'لا كاسا': 'la casa de papel',
     'البروفيسور': 'la casa de papel',
     'لوكي': 'loki',
     'دارك': 'dark',
@@ -289,7 +291,40 @@ ARABIC_MAPPINGS = {
     'فايكنج': 'vikings',
     'فايكنجز': 'vikings',
     'جلاديتور': 'gladiator',
-    'المصارع': 'gladiator'
+    'المصارع': 'gladiator',
+    'سترينجر ثينقز': 'stranger things',
+    'سترينجر ثينقس': 'stranger things',
+    'اشياء غريبة': 'stranger things',
+    'أشياء غريبة': 'stranger things',
+    'افاتار': 'avatar',
+    'أفاتار': 'avatar',
+    'ونزداي': 'wednesday',
+    'وينزداي': 'wednesday',
+    'وينزدي': 'wednesday',
+    'بريزون بريك': 'prison break',
+    'فاست اند فيورس': 'fast',
+    'ماد ماكس': 'mad max',
+    'جون ويك': 'john wick',
+    'امريكان كرايم ستوري': 'american crime story',
+    'امريكان هورور ستوري': 'american horror story',
+    'هاوس اوف دراجون': 'house of the dragon',
+    'ال تشابو': 'el chapo',
+    'ذا لاست اوف اس': 'the last of us',
+    'لاست اوف اس': 'the last of us',
+    'افينجرز': 'avengers',
+    'المنتقمون': 'avengers',
+    'ايرون مان': 'iron man',
+    'الرجل الحديدي': 'iron man',
+    'كابتن امريكا': 'captain america',
+    'ديدبول': 'deadpool',
+    'جوكر': 'joker',
+    'الجوكر': 'joker',
+    'هاري بوتر': 'harry potter',
+    'سيد الخواتم': 'lord of the rings',
+    'ماتريكس': 'matrix',
+    'الماتريكس': 'matrix',
+    'ترمينيتور': 'terminator',
+    'المبيد': 'terminator'
 }
 
 def normalize_arabic(text: str) -> str:
@@ -299,14 +334,43 @@ def normalize_arabic(text: str) -> str:
     text = re.sub(r'[\u064B-\u065F\u0670]', '', text)
     return text.strip().lower()
 
-def search_media(query: str, limit: int = 20):
-    q_norm = normalize_arabic(query)
-    search_queries = [query]
-    for ar_key, en_val in ARABIC_MAPPINGS.items():
-        if ar_key in q_norm or ar_key in query.lower():
-            search_queries.append(en_val)
+def clean_query_terms(raw_query: str):
+    # 0. Multiline pasted message handling: take first line
+    lines = [l.strip() for l in raw_query.splitlines() if l.strip()]
+    if lines:
+        raw_query = lines[0]
+
+    # 1. Strip emojis, symbols, and pictographs
+    q = re.sub(r'[\u2600-\u27bf\u2300-\u23ff\U0001f300-\U0001faff\U00010000-\U0010ffff]', ' ', raw_query)
+    # 2. Strip markdown symbols, punctuation & brackets
+    q = re.sub(r'[*_~`#\[\]\(\)\|:!?,.\"/\\-]+', ' ', q)
+    # 3. Strip mentions
+    q = re.sub(r'@\w+', ' ', q)
+    # 4. Strip leading prefixes (فيلم, مسلسل, etc.)
+    q = re.sub(r'^(فيلم|فلم|مسلسل|سلسلة|انمي|أنمي|movie|series)\s+', '', q.strip(), flags=re.I)
+    # 5. Strip quality/resolution words
+    q = re.sub(r'\b(1080p|720p|480p|4k|2160p|hd|fhd|bluray|web-dl|webrip|x264|x265)\b', ' ', q, flags=re.I)
+    # 6. Strip year tags
+    q = re.sub(r'\b(19\d\d|20\d\d)\b', ' ', q)
+    q = ' '.join(q.split()).strip()
+
+    q_norm = normalize_arabic(q)
+    terms = [q] if q else []
+
+    # Check Arabic mappings
+    for ar_k, en_v in ARABIC_MAPPINGS.items():
+        if ar_k in q_norm or ar_k in raw_query.lower():
+            if en_v not in terms:
+                terms.append(en_v)
             break
 
+    if not terms:
+        terms = [raw_query.strip()]
+
+    return terms
+
+def search_media(query: str, limit: int = 15):
+    terms = clean_query_terms(query)
     series_rows = []
     movie_rows = []
     seen_series = set()
@@ -315,12 +379,16 @@ def search_media(query: str, limit: int = 20):
     mdb = get_mongo_db()
     if mdb is not None:
         col = mdb['media_items']
-        for term in search_queries:
-            reg = re.compile(re.escape(term), re.IGNORECASE)
+        for term in terms:
+            if not term:
+                continue
+            words = [re.escape(w) for w in term.split() if len(w) >= 2]
 
-            # 1. Search series
-            matched_series = col.distinct('series_title', {'is_series': 1, 'series_title': reg})
-            for st in matched_series[:limit]:
+            # 1. Exact / Phrase match
+            exact_reg = re.compile(re.escape(term), re.IGNORECASE)
+            
+            # Search series
+            for st in col.distinct('series_title', {'is_series': 1, 'series_title': exact_reg}):
                 if st and st not in seen_series:
                     first_doc = col.find_one({'is_series': 1, 'series_title': st})
                     seasons = len(col.distinct('season_num', {'is_series': 1, 'series_title': st}))
@@ -334,15 +402,100 @@ def search_media(query: str, limit: int = 20):
                     })
                     seen_series.add(st)
 
-            # 2. Search movies
+            # Search movies (valid target_msg_id <= 3050)
             m_docs = list(col.find(
-                {'is_series': 0, 'clean_title': reg},
+                {'is_series': 0, 'clean_title': exact_reg, 'target_msg_id': {'$lte': 3050}},
                 {'id': 1, 'clean_title': 1, 'quality': 1, 'file_size': 1, 'duration': 1, 'target_msg_id': 1}
             ).sort('id', -1).limit(limit))
             for m in m_docs:
                 if m['id'] not in seen_movies:
                     movie_rows.append(m)
                     seen_movies.add(m['id'])
+
+            # 2. Multi-word AND search (all words must appear in title in any order)
+            if len(words) > 1 and (len(series_rows) < limit or len(movie_rows) < limit):
+                and_pattern = ''.join(f'(?=.*{w})' for w in words)
+                and_reg = re.compile(and_pattern, re.IGNORECASE)
+
+                for st in col.distinct('series_title', {'is_series': 1, 'series_title': and_reg}):
+                    if st and st not in seen_series and len(series_rows) < limit:
+                        first_doc = col.find_one({'is_series': 1, 'series_title': st})
+                        seasons = len(col.distinct('season_num', {'is_series': 1, 'series_title': st}))
+                        episodes = col.count_documents({'is_series': 1, 'series_title': st})
+                        series_rows.append({
+                            'is_series': 1,
+                            'series_title': st,
+                            'seasons_count': seasons,
+                            'episodes_count': episodes,
+                            'first_id': first_doc['id'] if first_doc else 0
+                        })
+                        seen_series.add(st)
+
+                m_docs_and = list(col.find(
+                    {'is_series': 0, 'clean_title': and_reg, 'target_msg_id': {'$lte': 3050}},
+                    {'id': 1, 'clean_title': 1, 'quality': 1, 'file_size': 1, 'duration': 1, 'target_msg_id': 1}
+                ).sort('id', -1).limit(limit))
+                for m in m_docs_and:
+                    if m['id'] not in seen_movies and len(movie_rows) < limit:
+                        movie_rows.append(m)
+                        seen_movies.add(m['id'])
+
+            # 3. Individual words fallback (if AND returned no results, test prominent words)
+            if not series_rows and not movie_rows and len(words) > 1:
+                for w in words:
+                    if len(w) >= 4:
+                        single_reg = re.compile(w, re.IGNORECASE)
+                        for st in col.distinct('series_title', {'is_series': 1, 'series_title': single_reg}):
+                            if st and st not in seen_series and len(series_rows) < limit:
+                                first_doc = col.find_one({'is_series': 1, 'series_title': st})
+                                seasons = len(col.distinct('season_num', {'is_series': 1, 'series_title': st}))
+                                episodes = col.count_documents({'is_series': 1, 'series_title': st})
+                                series_rows.append({
+                                    'is_series': 1,
+                                    'series_title': st,
+                                    'seasons_count': seasons,
+                                    'episodes_count': episodes,
+                                    'first_id': first_doc['id'] if first_doc else 0
+                                })
+                                seen_series.add(st)
+                        m_docs_single = list(col.find(
+                            {'is_series': 0, 'clean_title': single_reg, 'target_msg_id': {'$lte': 3050}},
+                            {'id': 1, 'clean_title': 1, 'quality': 1, 'file_size': 1, 'duration': 1, 'target_msg_id': 1}
+                        ).sort('id', -1).limit(limit))
+                        for m in m_docs_single:
+                            if m['id'] not in seen_movies and len(movie_rows) < limit:
+                                movie_rows.append(m)
+                                seen_movies.add(m['id'])
+                        if series_rows or movie_rows:
+                            break
+
+            # 4. Prefix Substring fallback (for partial words e.g. "avat" -> "avatar")
+            if not series_rows and not movie_rows and len(words) == 1 and len(term) >= 3:
+                sub_pattern = re.escape(term[:max(3, len(term) - 1)])
+                sub_reg = re.compile(sub_pattern, re.IGNORECASE)
+
+                for st in col.distinct('series_title', {'is_series': 1, 'series_title': sub_reg}):
+                    if st and st not in seen_series and len(series_rows) < limit:
+                        first_doc = col.find_one({'is_series': 1, 'series_title': st})
+                        seasons = len(col.distinct('season_num', {'is_series': 1, 'series_title': st}))
+                        episodes = col.count_documents({'is_series': 1, 'series_title': st})
+                        series_rows.append({
+                            'is_series': 1,
+                            'series_title': st,
+                            'seasons_count': seasons,
+                            'episodes_count': episodes,
+                            'first_id': first_doc['id'] if first_doc else 0
+                        })
+                        seen_series.add(st)
+
+                m_docs_sub = list(col.find(
+                    {'is_series': 0, 'clean_title': sub_reg, 'target_msg_id': {'$lte': 3050}},
+                    {'id': 1, 'clean_title': 1, 'quality': 1, 'file_size': 1, 'duration': 1, 'target_msg_id': 1}
+                ).sort('id', -1).limit(limit))
+                for m in m_docs_sub:
+                    if m['id'] not in seen_movies and len(movie_rows) < limit:
+                        movie_rows.append(m)
+                        seen_movies.add(m['id'])
 
             if series_rows or movie_rows:
                 break
@@ -352,8 +505,11 @@ def search_media(query: str, limit: int = 20):
     # SQLite Fallback
     conn = get_connection()
     cursor = conn.cursor()
-    for term in search_queries:
+    for term in terms:
+        if not term:
+            continue
         search_pattern = f"%{term}%"
+        words = [w for w in term.split() if len(w) >= 2]
 
         cursor.execute("""
         SELECT is_series, series_title, COUNT(DISTINCT season_num) as seasons_count, COUNT(*) as episodes_count, MIN(id) as first_id
@@ -371,7 +527,7 @@ def search_media(query: str, limit: int = 20):
         cursor.execute("""
         SELECT id, clean_title, quality, file_size, duration, target_msg_id
         FROM media_items
-        WHERE is_series = 0 AND clean_title LIKE ?
+        WHERE is_series = 0 AND target_msg_id <= 3050 AND clean_title LIKE ?
         ORDER BY id DESC LIMIT ?
         """, (search_pattern, limit))
         for r in cursor.fetchall():
@@ -379,6 +535,37 @@ def search_media(query: str, limit: int = 20):
             if m_dict['id'] not in seen_movies:
                 movie_rows.append(m_dict)
                 seen_movies.add(m_dict['id'])
+
+        # Multi-word AND search for SQLite
+        if len(words) > 1 and (len(series_rows) < limit or len(movie_rows) < limit):
+            where_series = " AND ".join(["series_title LIKE ?" for _ in words])
+            params_series = [f"%{w}%" for w in words] + [limit]
+            cursor.execute(f"""
+            SELECT is_series, series_title, COUNT(DISTINCT season_num) as seasons_count, COUNT(*) as episodes_count, MIN(id) as first_id
+            FROM media_items
+            WHERE is_series = 1 AND {where_series}
+            GROUP BY series_title
+            ORDER BY episodes_count DESC LIMIT ?
+            """, params_series)
+            for r in cursor.fetchall():
+                s_dict = dict(r)
+                if s_dict['series_title'] not in seen_series:
+                    series_rows.append(s_dict)
+                    seen_series.add(s_dict['series_title'])
+
+            where_movies = " AND ".join(["clean_title LIKE ?" for _ in words])
+            params_movies = [f"%{w}%" for w in words] + [limit]
+            cursor.execute(f"""
+            SELECT id, clean_title, quality, file_size, duration, target_msg_id
+            FROM media_items
+            WHERE is_series = 0 AND target_msg_id <= 3050 AND {where_movies}
+            ORDER BY id DESC LIMIT ?
+            """, params_movies)
+            for r in cursor.fetchall():
+                m_dict = dict(r)
+                if m_dict['id'] not in seen_movies and len(movie_rows) < limit:
+                    movie_rows.append(m_dict)
+                    seen_movies.add(m_dict['id'])
 
         if series_rows or movie_rows:
             break

@@ -40,7 +40,9 @@ SEASON_NAMES = {
     9: "التاسع", 10: "العاشر"
 }
 
-def format_caption(item):
+def format_caption(item, storage_msg=None):
+    if storage_msg and getattr(storage_msg, 'text', None) and BOT_USERNAME in storage_msg.text:
+        return storage_msg.text
     if item['is_series']:
         s_name = SEASON_NAMES.get(item['season_num'], str(item['season_num']))
         return (
@@ -508,7 +510,6 @@ async def play_episode_handler(event):
         await event.answer("⚠️ الحلقة غير متوفرة.", alert=True)
         return
 
-    caption = format_caption(item)
     await event.answer("⏳ جاري تحضير الحلقة...")
 
     status_msg = await event.reply("⏳ جاري تجهيز الفيديو وإرساله إليك...")
@@ -530,6 +531,7 @@ async def play_episode_handler(event):
 
         storage_msg = await bot.get_messages(SERIES_CHANNEL, ids=target_msg_id)
         if storage_msg and storage_msg.media:
+            caption = format_caption(item, storage_msg=storage_msg)
             await bot.send_file(
                 event.chat_id,
                 storage_msg.media,
@@ -558,14 +560,12 @@ async def deliver_movie_by_id(chat_id, movie_id, callback_event=None, reply_to=N
             await bot.send_message(chat_id, "⚠️ الفيلم غير متوفر.", reply_to=reply_to)
         return
 
-    caption = format_caption(item)
-
     if callback_event:
         await callback_event.answer("⏳ جاري إرسال الفيلم فوراً...")
 
     try:
         target_msg_id = item.get('target_msg_id')
-        if not target_msg_id:
+        if not target_msg_id or target_msg_id > 3050:
             if callback_event:
                 await callback_event.answer("⚠️ الفيلم قيد التجهيز والنقل، يرجى المحاولة بعد قليل.", alert=True)
             elif reply_to:
@@ -574,6 +574,7 @@ async def deliver_movie_by_id(chat_id, movie_id, callback_event=None, reply_to=N
 
         storage_msg = await bot.get_messages(MOVIES_CHANNEL, ids=target_msg_id)
         if storage_msg and storage_msg.media:
+            caption = format_caption(item, storage_msg=storage_msg)
             await bot.send_file(
                 chat_id,
                 storage_msg.media,
