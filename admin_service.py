@@ -18,7 +18,12 @@ def get_mongo_db():
     if _mongo_client is None:
         try:
             from pymongo import MongoClient
-            _mongo_client = MongoClient(mongo_uri, serverSelectionTimeoutMS=7000)
+            try:
+                import certifi
+                ca_file = certifi.where()
+                _mongo_client = MongoClient(mongo_uri, tlsCAFile=ca_file, serverSelectionTimeoutMS=7000)
+            except Exception:
+                _mongo_client = MongoClient(mongo_uri, serverSelectionTimeoutMS=7000)
             _mongo_client.admin.command('ping')
         except Exception as e:
             print(f"Admin service Mongo warning: {e}")

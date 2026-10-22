@@ -3,3 +3,4 @@ cryptg==0.6.0
 aiofiles
 pymongo
 dnspython
+certifi
