@@ -716,6 +716,12 @@ async def main():
             except Exception as cmd_err:
                 print(f"Notice setting bot commands: {cmd_err}")
 
+            # Pre-load in-memory user cache to handle mass user concurrency instantly
+            try:
+                admin_service.init_user_cache()
+            except Exception as cache_err:
+                print(f"Notice init user cache: {cache_err}")
+
             await bot.run_until_disconnected()
         except Exception as e:
             print(f"Bot disconnected ({e}). Reconnecting in 5s...", flush=True)

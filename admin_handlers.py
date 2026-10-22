@@ -349,6 +349,9 @@ async def check_user_subscriptions(bot, user_id: int):
             await bot(GetParticipantRequest(channel=entity, participant=user_id))
         except UserNotParticipantError:
             missing.append(ch)
+        except FloodWaitError as fwe:
+            print(f"Telegram FloodWait ({fwe.seconds}s) on check_user_subscriptions: bypassing verification to prevent bot stall")
+            return True, []
         except Exception as e:
             # If bot cannot check or entity not accessible, log
             print(f"Could not verify subscription in {ch['title']}: {e}")

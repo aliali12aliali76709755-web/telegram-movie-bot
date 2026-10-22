@@ -1,6 +1,8 @@
 import sqlite3
 import os
 import re
+import threading
+import time
 from datetime import datetime
 
 DEFAULT_MONGO_URI = "mongodb+srv://bosshoeheoejossnpe_db_user:eQl1SyEvwIRDMs1w@cluster0.etprryl.mongodb.net/?retryWrites=true&w=majority"
@@ -9,6 +11,44 @@ ADMIN_ID = 8625825633
 ADMIN_IDS = {8625825633, 6641619062}
 
 _mongo_client = None
+_SUBSCRIBED_CACHE = set()
+_RECORDED_CACHE = {}  # user_id -> timestamp
+_CACHE_INITIALIZED = False
+
+def init_user_cache():
+    global _CACHE_INITIALIZED
+    if _CACHE_INITIALIZED:
+        return
+    try:
+        mdb = get_mongo_db()
+        if mdb is not None:
+            now_ts = time.time()
+            for doc in mdb['bot_users'].find({'is_subscribed': 1}, {'user_id': 1}):
+                _SUBSCRIBED_CACHE.add(doc['user_id'])
+            for doc in mdb['bot_users'].find({}, {'user_id': 1}):
+                _RECORDED_CACHE[doc['user_id']] = now_ts
+            _CACHE_INITIALIZED = True
+            print(f"init_user_cache: Cached {len(_SUBSCRIBED_CACHE)} subscribed users and {len(_RECORDED_CACHE)} total users in RAM.")
+            return
+    except Exception as e:
+        print(f"init_user_cache mongo warning: {e}")
+
+    try:
+        conn = get_connection()
+        c = conn.cursor()
+        c.execute("CREATE TABLE IF NOT EXISTS bot_users (user_id INTEGER PRIMARY KEY, username TEXT, first_name TEXT, last_name TEXT, first_seen TIMESTAMP, last_seen TIMESTAMP, is_subscribed INTEGER DEFAULT 0, is_blocked INTEGER DEFAULT 0, has_interacted INTEGER DEFAULT 0)")
+        c.execute("SELECT user_id, is_subscribed FROM bot_users")
+        now_ts = time.time()
+        for r in c.fetchall():
+            uid = r['user_id']
+            _RECORDED_CACHE[uid] = now_ts
+            if r['is_subscribed'] == 1:
+                _SUBSCRIBED_CACHE.add(uid)
+        conn.close()
+        _CACHE_INITIALIZED = True
+        print(f"init_user_cache (sqlite): Cached {len(_SUBSCRIBED_CACHE)} subscribed users and {len(_RECORDED_CACHE)} total users in RAM.")
+    except Exception as e:
+        print(f"init_user_cache sqlite warning: {e}")
 
 def get_mongo_db():
     global _mongo_client
@@ -36,80 +76,114 @@ def get_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
-# 1. USER TRACKING
+# 1. USER TRACKING (HIGH-CONCURRENCY NON-BLOCKING)
 def record_user(user_id: int, username: str = None, first_name: str = None, last_name: str = None):
-    now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-    mdb = get_mongo_db()
-    if mdb is not None:
+    init_user_cache()
+    now_ts = time.time()
+    # If user was already recorded in the last 15 minutes, skip DB completely!
+    if user_id in _RECORDED_CACHE and (now_ts - _RECORDED_CACHE[user_id]) < 900:
+        return
+    _RECORDED_CACHE[user_id] = now_ts
+
+    def _bg_record():
+        now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        mdb = get_mongo_db()
+        if mdb is not None:
+            try:
+                set_fields = {'last_seen': now_str}
+                if username: set_fields['username'] = username
+                if first_name: set_fields['first_name'] = first_name
+                if last_name: set_fields['last_name'] = last_name
+
+                mdb['bot_users'].update_one(
+                    {'user_id': user_id},
+                    {
+                        '$set': set_fields,
+                        '$setOnInsert': {
+                            'user_id': user_id,
+                            'first_seen': now_str,
+                            'is_subscribed': 0,
+                            'is_blocked': 0,
+                            'has_interacted': 0
+                        }
+                    },
+                    upsert=True
+                )
+                return
+            except Exception as e:
+                print(f"record_user mongo notice: {e}")
+
         try:
-            set_fields = {'last_seen': now_str}
-            if username: set_fields['username'] = username
-            if first_name: set_fields['first_name'] = first_name
-            if last_name: set_fields['last_name'] = last_name
-
-            mdb['bot_users'].update_one(
-                {'user_id': user_id},
-                {
-                    '$set': set_fields,
-                    '$setOnInsert': {
-                        'user_id': user_id,
-                        'first_seen': now_str,
-                        'is_subscribed': 0,
-                        'is_blocked': 0,
-                        'has_interacted': 0
-                    }
-                },
-                upsert=True
-            )
-            return
+            conn = get_connection()
+            c = conn.cursor()
+            c.execute("""
+            INSERT INTO bot_users (user_id, username, first_name, last_name, first_seen, last_seen)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ON CONFLICT(user_id) DO UPDATE SET
+                username = coalesce(excluded.username, bot_users.username),
+                first_name = coalesce(excluded.first_name, bot_users.first_name),
+                last_name = coalesce(excluded.last_name, bot_users.last_name),
+                last_seen = CURRENT_TIMESTAMP
+            """, (user_id, username, first_name, last_name))
+            conn.commit()
+            conn.close()
         except Exception as e:
-            print(f"record_user mongo error: {e}")
+            print(f"record_user sqlite notice: {e}")
 
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("""
-    INSERT INTO bot_users (user_id, username, first_name, last_name, first_seen, last_seen)
-    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-    ON CONFLICT(user_id) DO UPDATE SET
-        username = coalesce(excluded.username, bot_users.username),
-        first_name = coalesce(excluded.first_name, bot_users.first_name),
-        last_name = coalesce(excluded.last_name, bot_users.last_name),
-        last_seen = CURRENT_TIMESTAMP
-    """, (user_id, username, first_name, last_name))
-    conn.commit()
-    conn.close()
+    threading.Thread(target=_bg_record, daemon=True).start()
 
 def mark_user_subscribed(user_id: int):
-    now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-    mdb = get_mongo_db()
-    if mdb is not None:
+    _SUBSCRIBED_CACHE.add(user_id)
+    def _bg_sub():
+        now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        mdb = get_mongo_db()
+        if mdb is not None:
+            try:
+                mdb['bot_users'].update_one({'user_id': user_id}, {'$set': {'is_subscribed': 1, 'last_seen': now_str}}, upsert=True)
+                return
+            except Exception:
+                pass
+
         try:
-            mdb['bot_users'].update_one({'user_id': user_id}, {'$set': {'is_subscribed': 1, 'last_seen': now_str}})
-            return
+            conn = get_connection()
+            c = conn.cursor()
+            c.execute("UPDATE bot_users SET is_subscribed = 1, last_seen = CURRENT_TIMESTAMP WHERE user_id = ?", (user_id,))
+            conn.commit()
+            conn.close()
         except Exception:
             pass
 
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("UPDATE bot_users SET is_subscribed = 1, last_seen = CURRENT_TIMESTAMP WHERE user_id = ?", (user_id,))
-    conn.commit()
-    conn.close()
+    threading.Thread(target=_bg_sub, daemon=True).start()
 
 def is_user_cached_subscribed(user_id: int) -> bool:
+    if user_id in _SUBSCRIBED_CACHE:
+        return True
+    init_user_cache()
+    if user_id in _SUBSCRIBED_CACHE:
+        return True
+
     mdb = get_mongo_db()
     if mdb is not None:
         try:
-            u = mdb['bot_users'].find_one({'user_id': user_id})
-            return bool(u and u.get('is_subscribed') == 1)
+            u = mdb['bot_users'].find_one({'user_id': user_id}, {'is_subscribed': 1})
+            if u and u.get('is_subscribed') == 1:
+                _SUBSCRIBED_CACHE.add(user_id)
+                return True
         except Exception:
             pass
 
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("SELECT is_subscribed FROM bot_users WHERE user_id = ?", (user_id,))
-    row = c.fetchone()
-    conn.close()
-    return bool(row and row['is_subscribed'] == 1)
+    try:
+        conn = get_connection()
+        c = conn.cursor()
+        c.execute("SELECT is_subscribed FROM bot_users WHERE user_id = ?", (user_id,))
+        row = c.fetchone()
+        conn.close()
+        if row and row['is_subscribed'] == 1:
+            _SUBSCRIBED_CACHE.add(user_id)
+            return True
+    except Exception:
+        pass
+    return False
 
 def reset_all_users_subscription():
     mdb = get_mongo_db()
