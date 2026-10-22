@@ -423,6 +423,60 @@ def score_match(query: str, title: str) -> float:
 
     return 0.0
 
+def extract_movie_part(title: str) -> int:
+    t = (title or "").lower()
+    m_ar = re.search(r'الجزء\s*(الاول|الأول|الثاني|الثالث|الرابع|الخامس|السادس|السابع|الثامن|التاسع|العاشر|\d+)', t)
+    if m_ar:
+        ar_map = {
+            'الاول': 1, 'الأول': 1, 'الثاني': 2, 'الثالث': 3, 'الرابع': 4, 'الخامس': 5,
+            'السادس': 6, 'السابع': 7, 'الثامن': 8, 'التاسع': 9, 'العاشر': 10
+        }
+        val = m_ar.group(1)
+        return ar_map.get(val, int(val) if val.isdigit() else 1)
+
+    m_en = re.search(r'\b(?:part|chapter|vol|volume)\.?\s*([0-9]+|[ivx]+)\b', t, re.I)
+    if m_en:
+        val = m_en.group(1).lower()
+        roman = {'i': 1, 'ii': 2, 'iii': 3, 'iv': 4, 'v': 5, 'vi': 6, 'vii': 7, 'viii': 8, 'ix': 9, 'x': 10}
+        return roman.get(val, int(val) if val.isdigit() else 1)
+
+    m_digit = re.search(r'\b([2-9])\b(?!\s*(?:p|k|fps|bit|min|hr|gb|mb))', t)
+    if m_digit:
+        return int(m_digit.group(1))
+
+    return 1
+
+def deduplicate_movie_candidates(movies):
+    def preference_key(m):
+        t = m['clean_title']
+        has_year = 1 if re.search(r'\b(19\d\d|20\d\d)\b', t) else 0
+        return (has_year, m.get('file_size', 0))
+
+    sorted_candidates = sorted(movies, key=preference_key, reverse=True)
+    unique_movies = []
+    seen = set()
+
+    for m in sorted_candidates:
+        title = m['clean_title']
+        size_bytes = m.get('file_size', 0)
+        size_mb = round(size_bytes / (1024 * 1024))
+
+        base = clean_text(re.sub(r'\b(19\d\d|20\d\d)\b', '', title))
+        base = re.sub(r'\b(chapter|part|vol|volume|الجزء)\s*[0-9ivx]+\b', '', base, flags=re.I).strip()
+        base = re.sub(r'\b[2-9]\b', '', base).strip()
+
+        part = extract_movie_part(title)
+        size_bucket = round(size_mb / 40.0) * 40 if size_mb > 0 else 0
+
+        sig = (base, part, size_bucket)
+        if sig in seen:
+            continue
+
+        seen.add(sig)
+        unique_movies.append(m)
+
+    return unique_movies
+
 def search_media(query: str, limit: int = 15):
     terms = clean_query_terms(query)
     series_candidates = []
@@ -601,9 +655,18 @@ def search_media(query: str, limit: int = 15):
             scored_movies.append(m)
 
     scored_series.sort(key=lambda x: x['score'], reverse=True)
-    scored_movies.sort(key=lambda x: x['score'], reverse=True)
 
-    return {"series": scored_series[:limit], "movies": scored_movies[:limit]}
+    # Intelligent deduplication of duplicate uploads
+    deduped_movies = deduplicate_movie_candidates(scored_movies)
+
+    # Sort franchise movies by tier, sequential part number, and size
+    deduped_movies.sort(key=lambda x: (
+        round(x['score'] / 15.0),
+        -extract_movie_part(x['clean_title']),
+        x.get('file_size', 0)
+    ), reverse=True)
+
+    return {"series": scored_series[:limit], "movies": deduped_movies[:limit]}
 
 def get_media_item_by_id(item_id: int):
     mdb = get_mongo_db()

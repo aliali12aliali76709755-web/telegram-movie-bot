@@ -319,7 +319,8 @@ async def general_message_handler(event):
     # 2. Add Movie results
     for m in movies_list:
         mb = round(m['file_size'] / (1024 * 1024))
-        btn_text = f"🎬 {m['clean_title'][:25]} ({m['quality']} | {mb}MB)"
+        clean_disp = re.sub(r'[*_~`]+', '', m['clean_title']).strip()
+        btn_text = f"🎬 {clean_disp[:28]} ({m['quality']} | {mb}MB)"
         buttons.append([Button.inline(btn_text, data=f"movie_{m['id']}")])
 
     search_time = round((time.time() - t0) * 1000, 1)
