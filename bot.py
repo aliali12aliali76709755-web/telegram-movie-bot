@@ -134,7 +134,7 @@ async def cancel_cmd_handler(event):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 2. START COMMAND HANDLER
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-@bot.on(events.NewMessage(pattern=r'^/start(?:\s+(.+))?', func=lambda e: e.is_private))
+@bot.on(events.NewMessage(pattern=r'^\s*[\u200e\u200f]?/(?:start|ابدأ|بدء)(?:\s+(.+))?', func=lambda e: e.is_private))
 async def start_handler(event):
     sender = await event.get_sender()
     admin_service.record_user(
@@ -152,7 +152,7 @@ async def start_handler(event):
             await event.reply(text, buttons=buttons)
             return
 
-    param = event.pattern_match.group(1)
+    param = event.pattern_match.group(1) if event.pattern_match else None
     if param and param.startswith("movie_"):
         try:
             m_id = int(param.replace("movie_", ""))
@@ -184,7 +184,16 @@ async def support_handler(event):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 @bot.on(events.NewMessage(func=lambda e: e.is_private))
 async def general_message_handler(event):
-    if event.text.startswith('/'):
+    raw_text = (event.raw_text or event.text or "").strip()
+    if not raw_text:
+        return
+
+    # If it is any variant of /start (even with leading spaces or Arabic RTL markers)
+    if re.search(r'^[\u200e\u200f]?/(start|ابدأ|بدء)', raw_text, re.I):
+        await start_handler(event)
+        return
+
+    if raw_text.startswith('/'):
         return
 
     # 1. Intercept Admin interactive states
@@ -328,25 +337,18 @@ async def check_sub_callback(event):
     if is_ok:
         admin_service.mark_user_subscribed(event.sender_id)
         await event.answer("🎉 تم التحقق من اشتراكك بنجاح!", alert=False)
-        stats = get_stats()
-        text = (
-            "🎉 **تم التحقق من اشتراكك بنجاح! أهلاً بك في البوت.**\n\n"
-            f"📊 **إحصائيات المكتبة المتوفرة:**\n"
-            f"• 🎬 الأفلام المتوفرة: **{stats['total_movies']}** فيلم\n"
-            f"• 📺 المسلسلات المتوفرة: **{stats['total_series']}** مسلسل\n"
-            f"• 📦 إجمالي الأعمال: **{stats['total']}** عمل سينمائي\n\n"
-            "🔍 **طريقة الاستخدام:**\n"
-            "اكتب اسم أي فيلم أو مسلسل مباشرة في الشات (مثلاً: `Inception` أو `Avatar` أو `Gladiator`).\n\n"
-            "🛡️ **جميع الأعمال مفحوصة وموثقة برعاية Trustpilot**"
+        welcome_text = (
+            "أهلاً بك في بوت الأفلام والمسلسلات 🎬🍿\n\n"
+            "أرسل فقط اسم الفيلم أو المسلسل، وسأجلبه لك فوراً للمشاهدة والتحميل!"
         )
-        start_buttons = [[Button.url("👨‍💻 الدعم الفني", url="https://t.me/DSAS3")]]
         try:
-            if os.path.exists(COVER_IMAGE_PATH):
-                await event.edit(text, file=COVER_IMAGE_PATH, buttons=start_buttons)
-            else:
-                await event.edit(text, buttons=start_buttons)
+            await event.delete()
+            await bot.send_message(event.chat_id, welcome_text)
         except Exception:
-            await event.reply(text, buttons=start_buttons)
+            try:
+                await event.edit(welcome_text, buttons=None)
+            except Exception:
+                await bot.send_message(event.chat_id, welcome_text)
     else:
         await event.answer("❌ لم تشترك في كافة القنوات المطلوبة بعد! يرجى الاشتراك في القنوات ثم الضغط مجدداً.", alert=True)
         text, buttons = admin_handlers.build_fsub_prompt(missing)
@@ -683,19 +685,33 @@ async def main():
             me = await bot.get_me()
             print(f"Bot @{me.username} ({me.first_name}) is LIVE and serving users with Admin Panel & Instant Search!")
 
-            # Set Bot Menu Commands (Start & Support)
+            # Register Bot Commands for Default and Arabic
             try:
-                from telethon.tl.functions.bots import SetBotCommandsRequest
-                from telethon.tl.types import BotCommand, BotCommandScopeDefault
-                await bot(SetBotCommandsRequest(
-                    scope=BotCommandScopeDefault(),
-                    lang_code='',
-                    commands=[
-                        BotCommand(command="start", description="🚀 بدء تشغيل البوت والبحث"),
-                        BotCommand(command="support", description="👨‍💻 الدعم الفني والمساعدة")
-                    ]
-                ))
-                print("Bot menu commands registered successfully!")
+                import urllib.request
+                import json
+                for lc in ['', 'ar']:
+                    cmd_data = {
+                        'commands': [
+                            {'command': 'start', 'description': 'بدء تشغيل البوت والبحث 🎬'},
+                            {'command': 'support', 'description': 'الدعم الفني والمساعدة 👨‍💻'}
+                        ]
+                    }
+                    if lc:
+                        cmd_data['language_code'] = lc
+                    req_cmd = urllib.request.Request(
+                        f"https://api.telegram.org/bot{BOT_TOKEN}/setMyCommands",
+                        data=json.dumps(cmd_data).encode('utf-8'),
+                        headers={'Content-Type': 'application/json'}
+                    )
+                    urllib.request.urlopen(req_cmd, timeout=5)
+
+                req_menu = urllib.request.Request(
+                    f"https://api.telegram.org/bot{BOT_TOKEN}/setChatMenuButton",
+                    data=json.dumps({'menu_button': {'type': 'commands'}}).encode('utf-8'),
+                    headers={'Content-Type': 'application/json'}
+                )
+                urllib.request.urlopen(req_menu, timeout=5)
+                print("Bot menu commands and ☰ Menu button registered successfully!")
             except Exception as cmd_err:
                 print(f"Notice setting bot commands: {cmd_err}")
 
