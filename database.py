@@ -2,6 +2,8 @@ import sqlite3
 import os
 import re
 import difflib
+import threading
+import time
 from datetime import datetime
 
 DEFAULT_MONGO_URI = "mongodb+srv://bosshoeheoejossnpe_db_user:eQl1SyEvwIRDMs1w@cluster0.etprryl.mongodb.net/?retryWrites=true&w=majority"
@@ -329,48 +331,18 @@ ARABIC_MAPPINGS = {
 }
 
 def normalize_arabic(text: str) -> str:
+    if not text:
+        return ""
     text = re.sub(r'[إأآا]', 'ا', text)
     text = re.sub(r'ة', 'ه', text)
     text = re.sub(r'ى', 'ي', text)
     text = re.sub(r'[\u064B-\u065F\u0670]', '', text)
     return text.strip().lower()
 
-NORMALIZED_ARABIC_MAPPINGS = {normalize_arabic(k): v for k, v in ARABIC_MAPPINGS.items()}
-
-def clean_query_terms(raw_query: str):
-    # 0. Multiline pasted message handling: take first line
-    lines = [l.strip() for l in raw_query.splitlines() if l.strip()]
-    if lines:
-        raw_query = lines[0]
-
-    # 1. Strip emojis, symbols, and pictographs
-    q = re.sub(r'[\u2600-\u27bf\u2300-\u23ff\U0001f300-\U0001faff\U00010000-\U0010ffff]', ' ', raw_query)
-    # 2. Strip markdown symbols, punctuation & brackets
-    q = re.sub(r'[*_~`#\[\]\(\)\|:!?,.\"/\\-]+', ' ', q)
-    # 3. Strip mentions
-    q = re.sub(r'@\w+', ' ', q)
-    # 4. Strip leading prefixes (فيلم, مسلسل, etc.)
-    q = re.sub(r'^(فيلم|فلم|مسلسل|سلسلة|انمي|أنمي|movie|series)\s+', '', q.strip(), flags=re.I)
-    # 5. Strip quality/resolution words
-    q = re.sub(r'\b(1080p|720p|480p|4k|2160p|hd|fhd|bluray|web-dl|webrip|x264|x265)\b', ' ', q, flags=re.I)
-    # 6. Strip year tags
-    q = re.sub(r'\b(19\d\d|20\d\d)\b', ' ', q)
-    q = ' '.join(q.split()).strip()
-
-    q_norm = normalize_arabic(q)
-    terms = [q] if q else []
-
-    # Check Arabic mappings
-    for ar_k, en_v in NORMALIZED_ARABIC_MAPPINGS.items():
-        if ar_k in q_norm:
-            if en_v not in terms:
-                terms.append(en_v)
-            break
-
-    if not terms:
-        terms = [raw_query.strip()]
-
-    return terms
+def strip_ar_prefix(w: str) -> str:
+    if w.startswith("ال") and len(w) > 3:
+        return w[2:]
+    return w
 
 def clean_text(text: str) -> str:
     if not text:
@@ -383,18 +355,83 @@ def clean_text(text: str) -> str:
     t = re.sub(r'\b(19\d\d|20\d\d)\b', ' ', t)
     return ' '.join(t.split()).strip().lower()
 
-def score_match(query: str, title: str) -> float:
-    q_norm = normalize_arabic(clean_text(query))
-    t_norm = normalize_arabic(clean_text(title))
-    if not q_norm or not t_norm:
+def normalize_ar_key(text: str) -> str:
+    norm = normalize_arabic(clean_text(text))
+    words = [strip_ar_prefix(w) for w in norm.split() if len(w) >= 2]
+    return ' '.join(words)
+
+CORE_MAPPINGS = {normalize_ar_key(k): v.lower() for k, v in ARABIC_MAPPINGS.items()}
+
+def map_arabic_query(q: str) -> list:
+    q_norm = normalize_ar_key(q)
+    if not q_norm:
+        return []
+    mapped = []
+    if q_norm in CORE_MAPPINGS:
+        mapped.append(CORE_MAPPINGS[q_norm])
+    for k, v in CORE_MAPPINGS.items():
+        if k in q_norm or q_norm in k:
+            if v not in mapped:
+                mapped.append(v)
+    if not mapped:
+        for k, v in CORE_MAPPINGS.items():
+            if difflib.SequenceMatcher(None, q_norm, k).ratio() >= 0.78:
+                if v not in mapped:
+                    mapped.append(v)
+                break
+    return mapped
+
+def phonetic_skeleton(w: str) -> str:
+    w = re.sub(r'(ea|ee|ei|ie|ey|y)', 'i', w)
+    w = re.sub(r'oo|ou', 'u', w)
+    w = re.sub(r'ph', 'f', w)
+    w = re.sub(r'ck', 'k', w)
+    return re.sub(r'(.)\1+', r'\1', w)
+
+def word_similarity(w1: str, w2: str) -> float:
+    if w1 == w2:
+        return 1.0
+    l1, l2 = len(w1), len(w2)
+    diff = abs(l1 - l2)
+    if diff > 3:
+        if min(l1, l2) >= 4 and (w1.startswith(w2) or w2.startswith(w1)):
+            return min(l1, l2) / max(l1, l2)
         return 0.0
 
-    # Arabic mappings check for both query and title
-    for ar_k, en_v in NORMALIZED_ARABIC_MAPPINGS.items():
-        if ar_k in q_norm:
-            q_norm = q_norm.replace(ar_k, en_v)
-        if ar_k in t_norm:
-            t_norm = t_norm.replace(ar_k, en_v)
+    # Fast character overlap guard
+    common = sum(min(w1.count(c), w2.count(c)) for c in set(w1))
+    if common < max(l1, l2) - 2:
+        return 0.0
+
+    # Phonetic check
+    sk1 = phonetic_skeleton(w1)
+    sk2 = phonetic_skeleton(w2)
+    if sk1 == sk2:
+        return 0.92
+
+    # Fast Levenshtein distance
+    prev = list(range(l2 + 1))
+    for i, c1 in enumerate(w1):
+        curr = [i + 1] * (l2 + 1)
+        for j, c2 in enumerate(w2):
+            cost = 0 if c1 == c2 else 1
+            curr[j + 1] = min(curr[j] + 1, prev[j + 1] + 1, prev[j] + cost)
+        prev = curr
+    dist = prev[l2]
+    max_len = max(l1, l2)
+    lev_ratio = 1.0 - (dist / max_len)
+
+    seq_ratio = difflib.SequenceMatcher(None, w1, w2).ratio()
+    sk_ratio = difflib.SequenceMatcher(None, sk1, sk2).ratio()
+    return max(lev_ratio, seq_ratio, sk_ratio * 0.90)
+
+def score_candidate(q_norm: str, q_words: list, item: dict) -> float:
+    t_norm = item['norm']
+    t_words = item['words']
+    t_words_core = item['words_core']
+
+    if not t_norm or not q_norm:
+        return 0.0
 
     # 1. Exact match
     if q_norm == t_norm:
@@ -402,24 +439,51 @@ def score_match(query: str, title: str) -> float:
 
     # 2. Phrase contains
     if q_norm in t_norm:
-        return 90.0 + min(5.0, (len(q_norm) / len(t_norm)) * 5.0)
+        return 92.0 + min(6.0, (len(q_norm) / len(t_norm)) * 6.0)
 
-    # 3. Token match (all words in query must match words in title)
-    q_words = [w for w in q_norm.split() if len(w) >= 2]
-    t_words = [w for w in t_norm.split() if len(w) >= 2]
-    if q_words and t_words:
-        matched_words = 0
-        for qw in q_words:
-            if any(qw in tw or tw in qw or difflib.SequenceMatcher(None, qw, tw).ratio() >= 0.80 for tw in t_words):
-                matched_words += 1
-        if matched_words == len(q_words):
-            sim = difflib.SequenceMatcher(None, q_norm, t_norm).ratio()
-            return 75.0 + sim * 15.0
+    # 3. Token match
+    matched_count = 0
+    sim_scores = []
+    has_exact_long_word = False
+    for qw in q_words:
+        qw_core = strip_ar_prefix(qw)
+        best_sim = 0.0
+        for tw, tw_core in zip(t_words, t_words_core):
+            if qw == tw or qw_core == tw_core:
+                best_sim = 1.0
+                if len(qw) >= 5:
+                    has_exact_long_word = True
+                break
+            s = word_similarity(qw, tw)
+            s_core = word_similarity(qw_core, tw_core)
+            m_s = max(s, s_core)
+            if m_s > best_sim:
+                best_sim = m_s
 
-    # 4. Strict overall fuzzy similarity
-    sim = difflib.SequenceMatcher(None, q_norm, t_norm).ratio()
-    if sim >= 0.70:
-        return float(int(sim * 80.0))
+        threshold = 0.60 if has_exact_long_word else 0.70
+        if best_sim >= threshold:
+            matched_count += 1
+            sim_scores.append(best_sim)
+
+    if matched_count == len(q_words):
+        avg_sim = sum(sim_scores) / len(sim_scores)
+        return 78.0 + (avg_sim * 16.0)
+
+    # 4. Long keyword match
+    if has_exact_long_word and len(q_words) >= 2 and matched_count >= 1:
+        avg_sim = sum(sim_scores) / len(sim_scores)
+        return 72.0 + (avg_sim * 12.0)
+
+    # 5. Multi-word partial query match (3+ words)
+    if len(q_words) >= 3 and matched_count >= len(q_words) - 1:
+        avg_sim = sum(sim_scores) / len(sim_scores)
+        return 68.0 + (avg_sim * 12.0)
+
+    # 6. Global single word fallback
+    if len(q_words) == 1 and len(q_norm) >= 4:
+        sim = difflib.SequenceMatcher(None, q_norm, t_norm).ratio()
+        if sim >= 0.72:
+            return sim * 85.0
 
     return 0.0
 
@@ -477,196 +541,169 @@ def deduplicate_movie_candidates(movies):
 
     return unique_movies
 
-def search_media(query: str, limit: int = 15):
-    terms = clean_query_terms(query)
-    series_candidates = []
-    movie_candidates = []
-    seen_series = set()
-    seen_movies = set()
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# IN-MEMORY CATALOG CACHE (LIGHTWEIGHT & HIGH-SPEED SEARCH)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+_CATALOG_CACHE = {
+    'series': [],
+    'movies': [],
+    'last_refresh': 0.0
+}
+_CATALOG_LOCK = threading.Lock()
 
-    mdb = get_mongo_db()
-    if mdb is not None:
-        col = mdb['media_items']
-        for term in terms:
-            if not term:
-                continue
-            words = [re.escape(w) for w in term.split() if len(w) >= 2]
-            exact_reg = re.compile(re.escape(term), re.IGNORECASE)
+def refresh_catalog_cache(force: bool = False):
+    now = time.time()
+    if not force and (now - _CATALOG_CACHE['last_refresh']) < 45.0 and _CATALOG_CACHE['movies']:
+        return
 
-            # Query series
-            for st in col.distinct('series_title', {'is_series': 1, 'series_title': exact_reg}):
-                if st and st not in seen_series:
-                    first_doc = col.find_one({'is_series': 1, 'series_title': st})
-                    seasons = len(col.distinct('season_num', {'is_series': 1, 'series_title': st}))
-                    episodes = col.count_documents({'is_series': 1, 'series_title': st})
-                    series_candidates.append({
+    with _CATALOG_LOCK:
+        # Double-check inside lock
+        if not force and (now - _CATALOG_CACHE['last_refresh']) < 45.0 and _CATALOG_CACHE['movies']:
+            return
+
+        loaded_series = []
+        loaded_movies = []
+
+        mdb = get_mongo_db()
+        if mdb is not None:
+            col = mdb['media_items']
+            # Load series summary
+            pipeline = [
+                {'$match': {'is_series': 1}},
+                {'$group': {
+                    '_id': '$series_title',
+                    'seasons_count': {'$addToSet': '$season_num'},
+                    'episodes_count': {'$sum': 1},
+                    'first_id': {'$min': '$id'}
+                }}
+            ]
+            for doc in col.aggregate(pipeline):
+                st = doc['_id']
+                if st:
+                    loaded_series.append({
                         'is_series': 1,
                         'series_title': st,
-                        'seasons_count': seasons,
-                        'episodes_count': episodes,
-                        'first_id': first_doc['id'] if first_doc else 0
+                        'seasons_count': len(doc.get('seasons_count', [])),
+                        'episodes_count': doc.get('episodes_count', 0),
+                        'first_id': doc.get('first_id', 0)
                     })
-                    seen_series.add(st)
 
-            # Query movies
+            # Load transferred movies
             m_docs = list(col.find(
-                {'is_series': 0, 'clean_title': exact_reg, 'target_msg_id': {'$gt': 0}},
+                {'is_series': 0, 'target_msg_id': {'$gt': 0}},
                 {'id': 1, 'clean_title': 1, 'quality': 1, 'file_size': 1, 'duration': 1, 'target_msg_id': 1}
-            ).sort('id', -1).limit(limit * 2))
+            ))
             for m in m_docs:
-                if m['id'] not in seen_movies:
-                    movie_candidates.append(m)
-                    seen_movies.add(m['id'])
-
-            # Multi-word search if needed
-            if len(words) > 1:
-                and_pattern = ''.join(f'(?=.*{w})' for w in words)
-                and_reg = re.compile(and_pattern, re.IGNORECASE)
-                for st in col.distinct('series_title', {'is_series': 1, 'series_title': and_reg}):
-                    if st and st not in seen_series:
-                        first_doc = col.find_one({'is_series': 1, 'series_title': st})
-                        seasons = len(col.distinct('season_num', {'is_series': 1, 'series_title': st}))
-                        episodes = col.count_documents({'is_series': 1, 'series_title': st})
-                        series_candidates.append({
-                            'is_series': 1,
-                            'series_title': st,
-                            'seasons_count': seasons,
-                            'episodes_count': episodes,
-                            'first_id': first_doc['id'] if first_doc else 0
-                        })
-                        seen_series.add(st)
-
-                m_docs_and = list(col.find(
-                    {'is_series': 0, 'clean_title': and_reg, 'target_msg_id': {'$gt': 0}},
-                    {'id': 1, 'clean_title': 1, 'quality': 1, 'file_size': 1, 'duration': 1, 'target_msg_id': 1}
-                ).sort('id', -1).limit(limit * 2))
-                for m in m_docs_and:
-                    if m['id'] not in seen_movies:
-                        movie_candidates.append(m)
-                        seen_movies.add(m['id'])
-
-            # Single word prefix search if 1 word
-            if len(words) == 1 and len(term) >= 3:
-                sub_pattern = re.escape(term[:max(3, len(term) - 1)])
-                sub_reg = re.compile(sub_pattern, re.IGNORECASE)
-                for st in col.distinct('series_title', {'is_series': 1, 'series_title': sub_reg}):
-                    if st and st not in seen_series:
-                        first_doc = col.find_one({'is_series': 1, 'series_title': st})
-                        seasons = len(col.distinct('season_num', {'is_series': 1, 'series_title': st}))
-                        episodes = col.count_documents({'is_series': 1, 'series_title': st})
-                        series_candidates.append({
-                            'is_series': 1,
-                            'series_title': st,
-                            'seasons_count': seasons,
-                            'episodes_count': episodes,
-                            'first_id': first_doc['id'] if first_doc else 0
-                        })
-                        seen_series.add(st)
-                m_docs_sub = list(col.find(
-                    {'is_series': 0, 'clean_title': sub_reg, 'target_msg_id': {'$gt': 0}},
-                    {'id': 1, 'clean_title': 1, 'quality': 1, 'file_size': 1, 'duration': 1, 'target_msg_id': 1}
-                ).sort('id', -1).limit(limit * 2))
-                for m in m_docs_sub:
-                    if m['id'] not in seen_movies:
-                        movie_candidates.append(m)
-                        seen_movies.add(m['id'])
-
-    else:
-        # SQLite Fallback
-        conn = get_connection()
-        cursor = conn.cursor()
-        for term in terms:
-            if not term:
-                continue
-            search_pattern = f"%{term}%"
-            words = [w for w in term.split() if len(w) >= 2]
-
-            cursor.execute("""
-            SELECT is_series, series_title, COUNT(DISTINCT season_num) as seasons_count, COUNT(*) as episodes_count, MIN(id) as first_id
-            FROM media_items
-            WHERE is_series = 1 AND series_title LIKE ?
-            GROUP BY series_title
-            ORDER BY episodes_count DESC LIMIT ?
-            """, (search_pattern, limit * 2))
-            for r in cursor.fetchall():
-                s_dict = dict(r)
-                if s_dict['series_title'] not in seen_series:
-                    series_candidates.append(s_dict)
-                    seen_series.add(s_dict['series_title'])
-
-            cursor.execute("""
-            SELECT id, clean_title, quality, file_size, duration, target_msg_id
-            FROM media_items
-            WHERE is_series = 0 AND target_msg_id > 0 AND clean_title LIKE ?
-            ORDER BY id DESC LIMIT ?
-            """, (search_pattern, limit * 2))
-            for r in cursor.fetchall():
-                m_dict = dict(r)
-                if m_dict['id'] not in seen_movies:
-                    movie_candidates.append(m_dict)
-                    seen_movies.add(m_dict['id'])
-
-            if len(words) > 1:
-                where_series = " AND ".join(["series_title LIKE ?" for _ in words])
-                params_series = [f"%{w}%" for w in words] + [limit * 2]
-                cursor.execute(f"""
+                loaded_movies.append(m)
+        else:
+            conn = get_connection()
+            c = conn.cursor()
+            c.execute('''
                 SELECT is_series, series_title, COUNT(DISTINCT season_num) as seasons_count, COUNT(*) as episodes_count, MIN(id) as first_id
                 FROM media_items
-                WHERE is_series = 1 AND {where_series}
+                WHERE is_series = 1
                 GROUP BY series_title
-                ORDER BY episodes_count DESC LIMIT ?
-                """, params_series)
-                for r in cursor.fetchall():
-                    s_dict = dict(r)
-                    if s_dict['series_title'] not in seen_series:
-                        series_candidates.append(s_dict)
-                        seen_series.add(s_dict['series_title'])
+            ''')
+            loaded_series = [dict(r) for r in c.fetchall()]
 
-                where_movies = " AND ".join(["clean_title LIKE ?" for _ in words])
-                params_movies = [f"%{w}%" for w in words] + [limit * 2]
-                cursor.execute(f"""
+            c.execute('''
                 SELECT id, clean_title, quality, file_size, duration, target_msg_id
                 FROM media_items
-                WHERE is_series = 0 AND target_msg_id > 0 AND {where_movies}
-                ORDER BY id DESC LIMIT ?
-                """, params_movies)
-                for r in cursor.fetchall():
-                    m_dict = dict(r)
-                    if m_dict['id'] not in seen_movies:
-                        movie_candidates.append(m_dict)
-                        seen_movies.add(m_dict['id'])
+                WHERE is_series = 0 AND target_msg_id > 0
+            ''')
+            loaded_movies = [dict(r) for r in c.fetchall()]
+            conn.close()
 
-        conn.close()
+        # Precompute search metadata on all items for microsecond speed
+        for s in loaded_series:
+            s_norm = normalize_arabic(clean_text(s['series_title']))
+            s['norm'] = s_norm
+            s['words'] = [w for w in s_norm.split() if len(w) >= 2]
+            s['words_core'] = [strip_ar_prefix(w) for w in s['words']]
 
-    # STRICT INTELLIGENT SCORING & FILTERING
-    # Hard threshold: Any score < 60.0 is completely discarded
-    scored_series = []
-    for s in series_candidates:
-        score = score_match(query, s['series_title'])
-        if score >= 60.0:
-            s['score'] = score
-            scored_series.append(s)
+        for m in loaded_movies:
+            m_norm = normalize_arabic(clean_text(m['clean_title']))
+            m['norm'] = m_norm
+            m['words'] = [w for w in m_norm.split() if len(w) >= 2]
+            m['words_core'] = [strip_ar_prefix(w) for w in m['words']]
 
-    scored_movies = []
-    for m in movie_candidates:
-        score = score_match(query, m['clean_title'])
-        if score >= 60.0:
-            m['score'] = score
-            scored_movies.append(m)
+        _CATALOG_CACHE['series'] = loaded_series
+        _CATALOG_CACHE['movies'] = loaded_movies
+        _CATALOG_CACHE['last_refresh'] = time.time()
 
-    scored_series.sort(key=lambda x: x['score'], reverse=True)
+def get_search_prefixes(q_words: list) -> list:
+    prefixes = set()
+    for w in q_words:
+        if len(w) >= 2:
+            prefixes.add(w[:2])
+        if len(w) >= 3:
+            prefixes.add(w[:3])
+            prefixes.add(w[-3:])
+        if len(w) >= 4:
+            prefixes.add(w[1:4])
+    return list(prefixes)
 
-    # Intelligent deduplication of duplicate uploads
-    deduped_movies = deduplicate_movie_candidates(scored_movies)
+def search_media(query: str, limit: int = 15):
+    # Ensure cache is hot
+    refresh_catalog_cache()
 
-    # Sort franchise movies by tier, sequential part number, and size
+    # Expand query with Arabic canonical mappings
+    terms = [query]
+    mapped = map_arabic_query(query)
+    for m in mapped:
+        if m not in terms:
+            terms.append(m)
+
+    scored_series = {}
+    scored_movies = {}
+
+    series_catalog = _CATALOG_CACHE['series']
+    movies_catalog = _CATALOG_CACHE['movies']
+
+    for term in terms:
+        q_clean = clean_text(term)
+        q_norm = normalize_arabic(q_clean)
+        q_words = [w for w in q_norm.split() if len(w) >= 2]
+        if not q_words:
+            continue
+
+        prefixes = get_search_prefixes(q_words)
+
+        # 1. Series Candidates
+        s_cands = [s for s in series_catalog if any(p in s['norm'] for p in prefixes)]
+        for s in s_cands:
+            sc = score_candidate(q_norm, q_words, s)
+            if sc >= 60.0:
+                cur = scored_series.get(s['series_title'])
+                if not cur or sc > cur['score']:
+                    item_copy = dict(s)
+                    item_copy['score'] = sc
+                    scored_series[s['series_title']] = item_copy
+
+        # 2. Movie Candidates
+        m_cands = [m for m in movies_catalog if any(p in m['norm'] for p in prefixes)]
+        for m in m_cands:
+            sc = score_candidate(q_norm, q_words, m)
+            if sc >= 60.0:
+                cur = scored_movies.get(m['id'])
+                if not cur or sc > cur['score']:
+                    item_copy = dict(m)
+                    item_copy['score'] = sc
+                    scored_movies[m['id']] = item_copy
+
+    series_list = sorted(scored_series.values(), key=lambda x: x['score'], reverse=True)
+
+    # Intelligent deduplication of duplicate movie uploads
+    deduped_movies = deduplicate_movie_candidates(list(scored_movies.values()))
+
+    # Sort franchise movies by tight score tier (3-pt buckets), sequential part, and size
     deduped_movies.sort(key=lambda x: (
-        round(x['score'] / 15.0),
+        round(x['score'] / 3.0),
         -extract_movie_part(x['clean_title']),
         x.get('file_size', 0)
     ), reverse=True)
 
-    return {"series": scored_series[:limit], "movies": deduped_movies[:limit]}
+    return {"series": series_list[:limit], "movies": deduped_movies[:limit]}
 
 def get_media_item_by_id(item_id: int):
     mdb = get_mongo_db()
