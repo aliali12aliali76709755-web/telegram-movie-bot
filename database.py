@@ -1,15 +1,47 @@
 import sqlite3
 import os
 import re
+from datetime import datetime
 
+MONGO_URI = os.environ.get("MONGO_URI", "")
 DB_PATH = os.path.join(os.path.dirname(__file__), "movies.db")
 
+_mongo_client = None
+
+def get_mongo_db():
+    global _mongo_client
+    if not MONGO_URI:
+        return None
+    if _mongo_client is None:
+        try:
+            from pymongo import MongoClient
+            _mongo_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+            _mongo_client.admin.command('ping')
+        except Exception as e:
+            print(f"MongoDB connection notice: {e}")
+            return None
+    return _mongo_client['telegram_movie_bot']
+
 def get_connection():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30.0)
     conn.row_factory = sqlite3.Row
     return conn
 
 def init_db():
+    mdb = get_mongo_db()
+    if mdb is not None:
+        try:
+            media_col = mdb['media_items']
+            media_col.create_index([('id', 1)], unique=True)
+            media_col.create_index([('clean_title', 1)])
+            media_col.create_index([('series_title', 1), ('season_num', 1), ('episode_num', 1)])
+            media_col.create_index([('is_series', 1)])
+            media_col.create_index([('is_transferred', 1)])
+            print("MongoDB Atlas collections and indexes ready.")
+            return
+        except Exception as e:
+            print(f"MongoDB init_db notice: {e}")
+
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
@@ -35,7 +67,6 @@ def init_db():
         UNIQUE(source_chat_id, source_msg_id)
     )
     """)
-    # Check if columns exist, if not add them
     cursor.execute("PRAGMA table_info(media_items)")
     existing_cols = [r[1] for r in cursor.fetchall()]
     if 'is_series' not in existing_cols:
@@ -56,25 +87,12 @@ def init_db():
     conn.close()
 
 def parse_media_details(caption: str, file_name: str = None):
-    """
-    Intelligently parses movie or series details:
-    Returns dict: {
-        'is_series': bool,
-        'series_title': str,
-        'season_num': int,
-        'episode_num': int,
-        'clean_title': str,
-        'quality': str
-    }
-    """
     clean_line = ""
     if caption:
         lines = [l.strip() for l in caption.splitlines() if l.strip()]
         if lines:
             first_line = lines[0]
-            # Replace markdown link [Title](url) with just Title
             clean = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', first_line)
-            # Remove usernames and urls
             clean = re.sub(r'@\w+', '', clean)
             clean = re.sub(r'https?://\S+', '', clean)
             clean = re.sub(r'[\U0001F1E6-\U0001F1FF]{2}', '', clean)
@@ -84,7 +102,6 @@ def parse_media_details(caption: str, file_name: str = None):
         clean_line = os.path.splitext(file_name)[0]
         clean_line = re.sub(r'[\._]', ' ', clean_line)
 
-    # Detect quality
     quality = "HD"
     text_to_check = f"{caption or ''} {file_name or ''}"
     if re.search(r'\b1080p?\b', text_to_check, re.I):
@@ -96,8 +113,6 @@ def parse_media_details(caption: str, file_name: str = None):
     elif re.search(r'\b4k|2160p?\b', text_to_check, re.I):
         quality = "4K"
 
-    # Detect Series vs Movie
-    # Pattern 1: S01E02 or s1e2
     s_match = re.search(r'[sS](\d+)\s*[eE](\d+)', clean_line)
     if not s_match:
         s_match = re.search(r'[sS](\d+)\s*[eE](\d+)', text_to_check)
@@ -115,15 +130,12 @@ def parse_media_details(caption: str, file_name: str = None):
             'quality': quality
         }
 
-    # Pattern 2: EP.01 / EP 01 / Episode 01 / الحلقة 01
     ep_match = re.search(r'(?:EP\.?|Episode|الحلقة|حلقة)\s*(\d+)', clean_line, re.I)
     if ep_match:
         e_num = int(ep_match.group(1))
-        # Check season in line
         season_match = re.search(r'(?:S|Season|الموسم)\s*(\d+)', clean_line, re.I)
         s_num = int(season_match.group(1)) if season_match else 1
         
-        # Strip episode and season tags to get clean series title
         series_title = re.sub(r'(?:\||\-)?\s*(?:S|Season|الموسم)\s*\d+', '', clean_line, flags=re.I)
         series_title = re.sub(r'(?:\||\-)?\s*(?:EP\.?|Episode|الحلقة|حلقة)\s*\d+', '', series_title, flags=re.I)
         series_title = series_title.strip(" -|:")
@@ -137,9 +149,7 @@ def parse_media_details(caption: str, file_name: str = None):
             'quality': quality
         }
 
-    # Otherwise: It's a Movie!
     movie_title = clean_line
-    # Clean quality tags from movie title
     movie_title = re.sub(r'\b(1080p|720p|480p|2160p|4k|bluray|web-dl|webrip|hdrip|x264|x265|hevc|aac)\b', '', movie_title, flags=re.I).strip(" -|:")
     
     return {
@@ -192,37 +202,201 @@ def add_media_item(parsed_data, raw_caption, source_chat_id, source_msg_id,
     conn.commit()
     item_id = cursor.lastrowid
     conn.close()
+
+    # Also update MongoDB if connected
+    mdb = get_mongo_db()
+    if mdb is not None:
+        try:
+            doc = {
+                'id': item_id,
+                'is_series': parsed_data['is_series'],
+                'series_title': parsed_data['series_title'],
+                'season_num': parsed_data['season_num'],
+                'episode_num': parsed_data['episode_num'],
+                'title': parsed_data['clean_title'],
+                'clean_title': parsed_data['clean_title'],
+                'raw_caption': raw_caption,
+                'source_chat_id': source_chat_id,
+                'source_msg_id': source_msg_id,
+                'target_msg_id': target_msg_id,
+                'file_size': file_size,
+                'duration': duration,
+                'quality': parsed_data['quality'],
+                'media_type': media_type,
+                'is_transferred': is_transferred
+            }
+            mdb['media_items'].replace_one(
+                {'source_chat_id': source_chat_id, 'source_msg_id': source_msg_id},
+                doc,
+                upsert=True
+            )
+        except Exception:
+            pass
+
     return item_id
 
+ARABIC_MAPPINGS = {
+    'بريكنج باد': 'breaking bad',
+    'بريكينج باد': 'breaking bad',
+    'صراع العروش': 'game of thrones',
+    'قيم اوف ثرونز': 'game of thrones',
+    'جيم اوف ثرونز': 'game of thrones',
+    'بيكي بلايندرز': 'peaky blinders',
+    'بيكي بلاندرز': 'peaky blinders',
+    'باتمان': 'batman',
+    'سبايدرمان': 'spider',
+    'سبايدر مان': 'spider',
+    'سوبرمان': 'superman',
+    'سوبر مان': 'superman',
+    'تيتانيك': 'titanic',
+    'انسبشن': 'inception',
+    'إنسيبشن': 'inception',
+    'انترستيلر': 'interstellar',
+    'إنترستيلار': 'interstellar',
+    'فريندز': 'friends',
+    'فريندس': 'friends',
+    'شيرلوك': 'sherlock',
+    'شارلوك': 'sherlock',
+    'سكويد جيم': 'squid game',
+    'لعبة الحبار': 'squid game',
+    'لا كاسا دي بابيل': 'la casa de papel',
+    'البروفيسور': 'la casa de papel',
+    'لوكي': 'loki',
+    'دارك': 'dark',
+    'هانيبال': 'hannibal',
+    'ديكستر': 'dexter',
+    'مستر روبوت': 'mr robot',
+    'اوزارك': 'ozark',
+    'ذا ويتشر': 'the witcher',
+    'ويتشر': 'the witcher',
+    'ذا بويز': 'the boys',
+    'بويز': 'the boys',
+    'ذا اوفيس': 'the office',
+    'اوفيس': 'the office',
+    'شوجون': 'shogun',
+    'فول اوت': 'fallout',
+    'ريتشر': 'reacher',
+    'ناركوس': 'narcos',
+    'سوات': 's.w.a.t',
+    'الموتى السائرون': 'the walking dead',
+    'فايكنج': 'vikings',
+    'فايكنجز': 'vikings',
+    'جلاديتور': 'gladiator',
+    'المصارع': 'gladiator'
+}
+
+def normalize_arabic(text: str) -> str:
+    text = re.sub(r'[إأآا]', 'ا', text)
+    text = re.sub(r'ة', 'ه', text)
+    text = re.sub(r'ى', 'ي', text)
+    text = re.sub(r'[\u064B-\u065F\u0670]', '', text)
+    return text.strip().lower()
+
 def search_media(query: str, limit: int = 20):
-    """Search movies or distinct series by title."""
+    q_norm = normalize_arabic(query)
+    search_queries = [query]
+    for ar_key, en_val in ARABIC_MAPPINGS.items():
+        if ar_key in q_norm or ar_key in query.lower():
+            search_queries.append(en_val)
+            break
+
+    series_rows = []
+    movie_rows = []
+    seen_series = set()
+    seen_movies = set()
+
+    mdb = get_mongo_db()
+    if mdb is not None:
+        col = mdb['media_items']
+        for term in search_queries:
+            reg = re.compile(re.escape(term), re.IGNORECASE)
+
+            # 1. Search series
+            matched_series = col.distinct('series_title', {'is_series': 1, 'series_title': reg})
+            for st in matched_series[:limit]:
+                if st and st not in seen_series:
+                    first_doc = col.find_one({'is_series': 1, 'series_title': st})
+                    seasons = len(col.distinct('season_num', {'is_series': 1, 'series_title': st}))
+                    episodes = col.count_documents({'is_series': 1, 'series_title': st})
+                    series_rows.append({
+                        'is_series': 1,
+                        'series_title': st,
+                        'seasons_count': seasons,
+                        'episodes_count': episodes,
+                        'first_id': first_doc['id'] if first_doc else 0
+                    })
+                    seen_series.add(st)
+
+            # 2. Search movies
+            m_docs = list(col.find(
+                {'is_series': 0, 'clean_title': reg},
+                {'id': 1, 'clean_title': 1, 'quality': 1, 'file_size': 1, 'duration': 1, 'target_msg_id': 1}
+            ).sort('id', -1).limit(limit))
+            for m in m_docs:
+                if m['id'] not in seen_movies:
+                    movie_rows.append(m)
+                    seen_movies.add(m['id'])
+
+            if series_rows or movie_rows:
+                break
+
+        return {"series": series_rows[:limit], "movies": movie_rows[:limit]}
+
+    # SQLite Fallback
     conn = get_connection()
     cursor = conn.cursor()
-    search_term = f"%{query}%"
-    
-    # 1. Search distinct series
-    cursor.execute("""
-    SELECT is_series, series_title, COUNT(DISTINCT season_num) as seasons_count, COUNT(*) as episodes_count, MIN(id) as first_id
-    FROM media_items
-    WHERE is_series = 1 AND (series_title LIKE ? OR raw_caption LIKE ?)
-    GROUP BY series_title
-    ORDER BY episodes_count DESC LIMIT ?
-    """, (search_term, search_term, limit))
-    series_rows = [dict(r) for r in cursor.fetchall()]
+    for term in search_queries:
+        search_pattern = f"%{term}%"
 
-    # 2. Search movies
-    cursor.execute("""
-    SELECT * FROM media_items
-    WHERE is_series = 0 AND (clean_title LIKE ? OR raw_caption LIKE ?)
-    ORDER BY id DESC LIMIT ?
-    """, (search_term, search_term, limit))
-    movie_rows = [dict(r) for r in cursor.fetchall()]
+        cursor.execute("""
+        SELECT is_series, series_title, COUNT(DISTINCT season_num) as seasons_count, COUNT(*) as episodes_count, MIN(id) as first_id
+        FROM media_items
+        WHERE is_series = 1 AND series_title LIKE ?
+        GROUP BY series_title
+        ORDER BY episodes_count DESC LIMIT ?
+        """, (search_pattern, limit))
+        for r in cursor.fetchall():
+            s_dict = dict(r)
+            if s_dict['series_title'] not in seen_series:
+                series_rows.append(s_dict)
+                seen_series.add(s_dict['series_title'])
+
+        cursor.execute("""
+        SELECT id, clean_title, quality, file_size, duration, target_msg_id
+        FROM media_items
+        WHERE is_series = 0 AND clean_title LIKE ?
+        ORDER BY id DESC LIMIT ?
+        """, (search_pattern, limit))
+        for r in cursor.fetchall():
+            m_dict = dict(r)
+            if m_dict['id'] not in seen_movies:
+                movie_rows.append(m_dict)
+                seen_movies.add(m_dict['id'])
+
+        if series_rows or movie_rows:
+            break
 
     conn.close()
-    return {"series": series_rows, "movies": movie_rows}
+    return {"series": series_rows[:limit], "movies": movie_rows[:limit]}
+
+def get_media_item_by_id(item_id: int):
+    mdb = get_mongo_db()
+    if mdb is not None:
+        doc = mdb['media_items'].find_one({'id': int(item_id)})
+        return doc
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM media_items WHERE id = ?", (item_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
 
 def get_series_seasons(series_title: str):
-    """Returns available season numbers for a given series."""
+    mdb = get_mongo_db()
+    if mdb is not None:
+        return sorted(mdb['media_items'].distinct('season_num', {'is_series': 1, 'series_title': series_title}))
+
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
@@ -235,7 +409,13 @@ def get_series_seasons(series_title: str):
     return seasons
 
 def get_season_episodes(series_title: str, season_num: int):
-    """Returns distinct episodes for a specific season of a series."""
+    mdb = get_mongo_db()
+    if mdb is not None:
+        docs = list(mdb['media_items'].find(
+            {'is_series': 1, 'series_title': series_title, 'season_num': season_num}
+        ).sort('episode_num', 1))
+        return docs
+
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
@@ -250,7 +430,6 @@ def get_season_episodes(series_title: str, season_num: int):
     return episodes
 
 def mark_transferred(source_chat_id: int, source_msg_id: int, target_msg_id: int, file_id: str = None):
-    """Marks an item as transferred to the storage channel."""
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
@@ -261,8 +440,25 @@ def mark_transferred(source_chat_id: int, source_msg_id: int, target_msg_id: int
     conn.commit()
     conn.close()
 
+    mdb = get_mongo_db()
+    if mdb is not None:
+        try:
+            mdb['media_items'].update_one(
+                {'source_chat_id': source_chat_id, 'source_msg_id': source_msg_id},
+                {'$set': {'is_transferred': 1, 'target_msg_id': target_msg_id, 'file_id': file_id}}
+            )
+        except Exception:
+            pass
+
 def get_next_episode(series_title: str, season_num: int, current_ep: int):
-    """Finds the next episode in the same season."""
+    mdb = get_mongo_db()
+    if mdb is not None:
+        doc = mdb['media_items'].find_one(
+            {'is_series': 1, 'series_title': series_title, 'season_num': season_num, 'episode_num': {'$gt': current_ep}},
+            sort=[('episode_num', 1)]
+        )
+        return doc
+
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
@@ -276,6 +472,16 @@ def get_next_episode(series_title: str, season_num: int, current_ep: int):
     return dict(row) if row else None
 
 def get_stats():
+    mdb = get_mongo_db()
+    if mdb is not None:
+        col = mdb['media_items']
+        return {
+            "total": col.count_documents({}), 
+            "total_series": len(col.distinct('series_title', {'is_series': 1})), 
+            "total_movies": col.count_documents({'is_series': 0}), 
+            "transferred": col.count_documents({'is_transferred': 1})
+        }
+
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM media_items")
@@ -296,5 +502,5 @@ def get_stats():
 
 if __name__ == "__main__":
     init_db()
-    print("Database schema initialized with Series & Movies structure!")
+    print("Database schema initialized!")
     print(get_stats())

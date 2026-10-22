@@ -1,3 +1,5 @@
 telethon==1.44.0
 cryptg==0.6.0
 aiofiles
+pymongo
+dnspython

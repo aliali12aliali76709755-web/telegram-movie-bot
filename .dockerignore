@@ -1,0 +1,12 @@
+.git
+__pycache__
+*.pyc
+*.session
+*.session-journal
+*.db
+*.mp4
+*.pdf
+*.log
+*.json
+token.txt
+temp/

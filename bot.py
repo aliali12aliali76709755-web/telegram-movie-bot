@@ -8,30 +8,31 @@ import cryptg
 from telethon import TelegramClient, events, Button
 from telethon.tl.types import DocumentAttributeVideo
 from database import (
-    get_connection, search_media, get_stats, 
+    get_media_item_by_id, search_media, get_stats, 
     get_series_seasons, get_season_episodes, get_next_episode,
     mark_transferred
 )
+import admin_service
+import admin_handlers
 
 API_ID = 32374871
 API_HASH = "88bae070f4b4fb8f348eb6a16e8879d2"
-TOKEN_FILE = os.path.join(os.path.dirname(__file__), "token.txt")
-if os.path.exists(TOKEN_FILE):
-    with open(TOKEN_FILE, "r", encoding="utf-8") as f:
-        BOT_TOKEN = f.read().strip()
-else:
-    BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
+if not BOT_TOKEN:
+    TOKEN_FILE = os.path.join(os.path.dirname(__file__), "token.txt")
+    if os.path.exists(TOKEN_FILE):
+        with open(TOKEN_FILE, "r", encoding="utf-8") as f:
+            BOT_TOKEN = f.read().strip()
 
 BOT_USERNAME = "@zxeeabot"
-STORAGE_CHANNEL = -1004477353424
+MOVIES_CHANNEL = -1004477353424
+SERIES_CHANNEL = -1004453601662
 
-USER_SESSION_PATH = os.path.join(os.path.dirname(__file__), "user_session")
 BOT_SESSION_PATH = os.path.join(os.path.dirname(__file__), "bot_session")
-TEMP_DIR = os.path.join(os.path.dirname(__file__), "temp")
-os.makedirs(TEMP_DIR, exist_ok=True)
+COVER_IMAGE_PATH = os.path.join(os.path.dirname(__file__), "custom_cover.jpg")
+THUMB_IMAGE_PATH = os.path.join(os.path.dirname(__file__), "custom_thumb_320.jpg")
 
-bot = TelegramClient(BOT_SESSION_PATH, API_ID, API_HASH)
-user_client = TelegramClient(USER_SESSION_PATH, API_ID, API_HASH)
+bot = TelegramClient(BOT_SESSION_PATH, API_ID, API_HASH, connection_retries=None, retry_delay=3)
 
 SEASON_NAMES = {
     1: "الأول", 2: "الثاني", 3: "الثالث", 4: "الرابع",
@@ -54,52 +55,44 @@ def format_caption(item):
             f"✨ **عبر: {BOT_USERNAME}**"
         )
 
-async def ensure_transferred(item, status_callback=None):
-    """
-    Ensures media is uploaded to STORAGE_CHANNEL (قناة افلام).
-    If not transferred yet, user_client downloads from restricted channel
-    and uploads to STORAGE_CHANNEL, then marks transferred.
-    """
-    if item.get('is_transferred') and item.get('target_msg_id'):
-        return item['target_msg_id']
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 1. ADMIN COMMANDS & STATE HANDLER
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+@bot.on(events.NewMessage(pattern=r'^/admin', func=lambda e: e.is_private))
+async def admin_cmd_handler(event):
+    if not admin_handlers.is_admin(event.sender_id):
+        return
+    text = admin_handlers.get_main_menu_text()
+    buttons = admin_handlers.get_main_menu_buttons()
+    await event.reply(text, buttons=buttons)
 
-    if status_callback:
-        await status_callback("⏳ جاري جلب الفيديو وتجهيزه لأول مرة (يرجى الانتظار ثوانٍ)...")
+@bot.on(events.NewMessage(pattern=r'^/cancel', func=lambda e: e.is_private))
+async def cancel_cmd_handler(event):
+    if event.sender_id in admin_handlers.ADMIN_STATES:
+        del admin_handlers.ADMIN_STATES[event.sender_id]
+        await event.reply("✅ تم إلغاء العملية الجارية والعودة للوضع الطبيعي.", buttons=Button.clear())
 
-    # Fetch from source using user_client (who has access to the restricted channel)
-    source_msg = await user_client.get_messages(item['source_chat_id'], ids=item['source_msg_id'])
-    if not source_msg or not (source_msg.video or source_msg.document):
-        raise Exception("لم يتم العثور على ملف الفيديو في القناة المصدر")
-
-    # Download via user_client
-    file_path = await user_client.download_media(source_msg, file=TEMP_DIR)
-    
-    if status_callback:
-        await status_callback("🚀 جاري رفع الفيديو إلى القناة الرسمية...")
-
-    # Upload to STORAGE_CHANNEL via user_client
-    sent_msg = await user_client.send_file(
-        STORAGE_CHANNEL,
-        file_path,
-        caption=f"🎬 {item['clean_title']}",
-        supports_streaming=True
-    )
-
-    # Clean local file
-    if os.path.exists(file_path):
-        os.remove(file_path)
-
-    # Update database
-    mark_transferred(
-        source_chat_id=item['source_chat_id'],
-        source_msg_id=item['source_msg_id'],
-        target_msg_id=sent_msg.id
-    )
-
-    return sent_msg.id
-
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 2. START COMMAND HANDLER
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 @bot.on(events.NewMessage(pattern=r'^/start(?:\s+(.+))?', func=lambda e: e.is_private))
 async def start_handler(event):
+    sender = await event.get_sender()
+    admin_service.record_user(
+        event.sender_id,
+        username=getattr(sender, 'username', None),
+        first_name=getattr(sender, 'first_name', None),
+        last_name=getattr(sender, 'last_name', None)
+    )
+
+    # Check Mandatory Subscription (bypass for admin)
+    if not admin_handlers.is_admin(event.sender_id):
+        is_ok, missing = await admin_handlers.check_user_subscriptions(bot, event.sender_id)
+        if not is_ok:
+            text, buttons = admin_handlers.build_fsub_prompt(missing)
+            await event.reply(text, buttons=buttons)
+            return
+
     param = event.pattern_match.group(1)
     if param and param.startswith("movie_"):
         try:
@@ -109,42 +102,147 @@ async def start_handler(event):
         except Exception as e:
             print(f"Deep link error: {e}")
 
-    stats = get_stats()
     text = (
-        "🎬 **أهلاً بك في بوت الأفلام والمسلسلات الرسمي!**\n\n"
-        f"📊 **إحصائيات المكتبة الحالية:**\n"
-        f"• 🎬 الأفلام المتوفرة: **{stats['total_movies']}** فيلم\n"
-        f"• 📺 المسلسلات المتوفرة: **{stats['total_series']}** مسلسل\n"
-        f"• 📦 إجمالي الأعمال: **{stats['total']}** عمل سينمائي\n\n"
-        "🔍 **طريقة الاستخدام:**\n"
-        "اكتب اسم أي فيلم أو مسلسل مباشرة في الشات (مثلاً: `Inception` أو `Avatar` أو `Gladiator`).\n\n"
-        "🛡️ **جميع الأعمال مفحوصة وموثقة برعاية Trustpilot**"
+        "أهلاً بك في بوت الأفلام والمسلسلات 🎬🍿\n\n"
+        "أرسل فقط اسم الفيلم أو المسلسل، وسأجلبه لك فوراً للمشاهدة والتحميل!"
     )
-    if os.path.exists(COVER_IMAGE_PATH):
-        await event.reply(text, file=COVER_IMAGE_PATH)
-    else:
-        await event.reply(text)
+    await event.reply(text)
 
+@bot.on(events.NewMessage(pattern=r'^(/(support|help)|.*الدعم\s*الفني.*)', func=lambda e: e.is_private))
+async def support_handler(event):
+    text = (
+        "💬 **قسم الدعم الفني والمساعدة**\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n"
+        "لطلب أي فيلم أو مسلسل، أو للإبلاغ عن أي استفسار أو مشكلة، "
+        "يسعدنا تواصلك مباشرة مع فريق الدعم الفني عبر الرابط أدناه:\n\n"
+        "👨‍💻 **معرف الدعم:** @DSAS3"
+    )
+    buttons = [[Button.url("👨‍💻 تواصل مع الدعم الفني", url="https://t.me/DSAS3")]]
+    await event.reply(text, buttons=buttons)
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 3. TEXT & SEARCH HANDLER (WITH ADMIN STATE INTERCEPTION)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 @bot.on(events.NewMessage(func=lambda e: e.is_private))
-async def search_handler(event):
+async def general_message_handler(event):
     if event.text.startswith('/'):
         return
 
+    # 1. Intercept Admin interactive states
+    if event.sender_id in admin_handlers.ADMIN_STATES:
+        state = admin_handlers.ADMIN_STATES[event.sender_id]
+        action = state.get('action')
+
+        if action == 'broadcast_await_msg':
+            admin_handlers.ADMIN_STATES[event.sender_id] = {
+                'action': 'broadcast_confirm',
+                'msg': event
+            }
+            user_ids = admin_service.get_all_user_ids()
+            buttons = [
+                [Button.inline("🚀 تأكيد وبدء الإذاعة فوراً", data="adm_bcast_confirm")],
+                [Button.inline("❌ إلغاء الإذاعة", data="adm_bcast_cancel")]
+            ]
+            await event.reply(
+                f"📢 **تم استلام رسالة الإذاعة بنجاح!**\n\n"
+                f"👥 سيتم إرسالها إلى: **{len(user_ids):,}** مستخدم.\n"
+                f"⚠️ هل أنت متأكد من بدء الإذاعة الجماعية الآن؟",
+                buttons=buttons
+            )
+            return
+
+        elif action == 'fsub_add_title':
+            title = event.text.strip()
+            state['title'] = title
+            state['action'] = 'fsub_add_link'
+            type_name = 'البوت' if state['type'] == 'bot' else ('القناة' if state['type'] == 'channel' else 'القروب')
+            await event.reply(
+                f"🔗 **أرسل الآن رابط {type_name} أو المعرف العام:**\n"
+                f"مثال: `https://t.me/example` أو `@example`\n\n"
+                f"• للإلغاء، أرسل `/cancel`."
+            )
+            return
+
+        elif action == 'fsub_add_link':
+            link = event.text.strip()
+            state['link'] = link
+            if state['type'] == 'bot':
+                admin_service.add_mandatory_channel(
+                    title=state['title'],
+                    link_or_username=state['link'],
+                    chat_id=None,
+                    channel_type='bot'
+                )
+                del admin_handlers.ADMIN_STATES[event.sender_id]
+                text, buttons = admin_handlers.get_fsub_view()
+                await event.reply(f"✅ **تمت إضافة البوت ({state['title']}) بنجاح!**", buttons=buttons)
+                return
+            else:
+                state['action'] = 'fsub_add_chat_id'
+                type_name = 'القناة' if state['type'] == 'channel' else 'القروب'
+                await event.reply(
+                    f"🆔 **أرسل الآن معرف {type_name} الرقمي (Chat ID) أو المعرف العام (@username) للتحقق:**\n"
+                    f"• للعامة: `@channel_username`\n"
+                    f"• للخاصة: آيدي القناة الرقمي مثل `-1001234567890`\n"
+                    f"*(ملاحظة هامة: يجب رفع البوت مشرفاً في القناة/القروب ليتمكن من فحص الأعضاء)*\n\n"
+                    f"• أو أرسل نفس الرابط/المعرف إذا كانت عامة."
+                )
+                return
+
+        elif action == 'fsub_add_chat_id':
+            chat_id_val = event.text.strip()
+            admin_service.add_mandatory_channel(
+                title=state['title'],
+                link_or_username=state['link'],
+                chat_id=chat_id_val,
+                channel_type=state['type']
+            )
+            del admin_handlers.ADMIN_STATES[event.sender_id]
+            text, buttons = admin_handlers.get_fsub_view()
+            await event.reply(f"✅ **تمت إضافة {state['title']} بنجاح وتفعيل الفحص!**", buttons=buttons)
+            return
+
+    # 2. Record User & Check Mandatory Subscription
+    sender = await event.get_sender()
+    admin_service.record_user(
+        event.sender_id,
+        username=getattr(sender, 'username', None),
+        first_name=getattr(sender, 'first_name', None),
+        last_name=getattr(sender, 'last_name', None)
+    )
+
+    if not admin_handlers.is_admin(event.sender_id):
+        is_ok, missing = await admin_handlers.check_user_subscriptions(bot, event.sender_id)
+        if not is_ok:
+            text, buttons = admin_handlers.build_fsub_prompt(missing)
+            await event.reply(text, buttons=buttons)
+            return
+
+    # 3. Handle Russian buttons residue cleanup
     query = event.text.strip()
+    if any(k in query for k in ['Главное', 'пользователя', 'меню', 'пользовател']):
+        await event.reply("✨ تم مسح وتطهير الأزرار القديمة بالكامل.", buttons=Button.clear())
+        return
+
     if len(query) < 2:
         await event.reply("⚠️ يرجى كتابة حرفين على الأقل للبحث.")
         return
 
+    # 4. Instant Search (< 0.5ms)
+    t0 = time.time()
     results = search_media(query, limit=15)
     series_list = results['series']
     movies_list = results['movies']
+
+    matched = series_list[0]['series_title'] if series_list else (movies_list[0]['clean_title'] if movies_list else None)
+    is_ser = 1 if series_list else 0
+    admin_service.log_search(event.sender_id, query, matched_title=matched, is_series=is_ser)
 
     if not series_list and not movies_list:
         await event.reply(f"❌ لم يتم العثور على نتائج لـ: **{query}**\nجرّب كتابة الاسم بشكل مختلف.")
         return
 
     buttons = []
-    
     # 1. Add Series results
     for s in series_list:
         btn_text = f"📺 {s['series_title']} ({s['seasons_count']} مواسم | {s['episodes_count']} حلقة)"
@@ -156,25 +254,186 @@ async def search_handler(event):
         btn_text = f"🎬 {m['clean_title'][:25]} ({m['quality']} | {mb}MB)"
         buttons.append([Button.inline(btn_text, data=f"movie_{m['id']}")])
 
+    search_time = round((time.time() - t0) * 1000, 1)
     await event.reply(
-        f"🔎 **نتائج البحث عن:** `{query}`\nاختر العمل المطلوب لعرض المواسم أو التحميل المباشر:",
+        f"🔎 **نتائج البحث عن:** `{query}`  *(⚡ {search_time}ms)*\nاختر العمل المطلوب لعرض المواسم أو التحميل المباشر:",
         buttons=buttons
     )
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 4. MANDATORY SUBSCRIPTION VERIFICATION CALLBACK
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+@bot.on(events.CallbackQuery(data=b"check_sub"))
+async def check_sub_callback(event):
+    is_ok, missing = await admin_handlers.check_user_subscriptions(bot, event.sender_id)
+    if is_ok:
+        admin_service.mark_user_subscribed(event.sender_id)
+        await event.answer("🎉 تم التحقق من اشتراكك بنجاح!", alert=False)
+        stats = get_stats()
+        text = (
+            "🎉 **تم التحقق من اشتراكك بنجاح! أهلاً بك في البوت.**\n\n"
+            f"📊 **إحصائيات المكتبة المتوفرة:**\n"
+            f"• 🎬 الأفلام المتوفرة: **{stats['total_movies']}** فيلم\n"
+            f"• 📺 المسلسلات المتوفرة: **{stats['total_series']}** مسلسل\n"
+            f"• 📦 إجمالي الأعمال: **{stats['total']}** عمل سينمائي\n\n"
+            "🔍 **طريقة الاستخدام:**\n"
+            "اكتب اسم أي فيلم أو مسلسل مباشرة في الشات (مثلاً: `Inception` أو `Avatar` أو `Gladiator`).\n\n"
+            "🛡️ **جميع الأعمال مفحوصة وموثقة برعاية Trustpilot**"
+        )
+        start_buttons = [[Button.url("👨‍💻 الدعم الفني", url="https://t.me/DSAS3")]]
+        try:
+            if os.path.exists(COVER_IMAGE_PATH):
+                await event.edit(text, file=COVER_IMAGE_PATH, buttons=start_buttons)
+            else:
+                await event.edit(text, buttons=start_buttons)
+        except Exception:
+            await event.reply(text, buttons=start_buttons)
+    else:
+        await event.answer("❌ لم تشترك في كافة القنوات المطلوبة بعد! يرجى الاشتراك في القنوات ثم الضغط مجدداً.", alert=True)
+        text, buttons = admin_handlers.build_fsub_prompt(missing)
+        try:
+            await event.edit(text, buttons=buttons)
+        except Exception:
+            pass
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 5. ADMIN PANEL CALLBACK ROUTER
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+@bot.on(events.CallbackQuery(pattern=r'^adm_'))
+async def admin_callback_router(event):
+    if not admin_handlers.is_admin(event.sender_id):
+        await event.answer("⚠️ غير مصرح لك بالوصول.", alert=True)
+        return
+
+    data = event.data.decode('utf-8')
+
+    if data == "adm_main":
+        text = admin_handlers.get_main_menu_text()
+        buttons = admin_handlers.get_main_menu_buttons()
+        await event.edit(text, buttons=buttons)
+
+    elif data == "adm_close":
+        await event.delete()
+
+    elif data == "adm_stats_menu":
+        await event.edit(
+            "📊 **قسم الإحصائيات الدقيقة**\n━━━━━━━━━━━━━━━━━━━━━\nاختر الفترة الزمنية التي تريد عرض تفاصيلها:",
+            buttons=admin_handlers.get_stats_menu_buttons()
+        )
+
+    elif data.startswith("adm_stat_"):
+        period = data.replace("adm_stat_", "")
+        text, buttons = admin_handlers.get_period_stats_view(period)
+        await event.edit(text, buttons=buttons)
+
+    elif data == "adm_top_menu":
+        await event.edit(
+            "🔝 **قائمة الأعمال الأكثر طلباً وبحثاً**\n━━━━━━━━━━━━━━━━━━━━━\nاختر نوع الأعمال لعرض توب 50:",
+            buttons=admin_handlers.get_top_menu_buttons()
+        )
+
+    elif data.startswith("adm_top_movies_"):
+        page = int(data.split("_")[-1])
+        text, buttons = admin_handlers.get_top_movies_view(page)
+        await event.edit(text, buttons=buttons)
+
+    elif data.startswith("adm_top_series_"):
+        page = int(data.split("_")[-1])
+        text, buttons = admin_handlers.get_top_series_view(page)
+        await event.edit(text, buttons=buttons)
+
+    elif data == "adm_fsub_menu":
+        text, buttons = admin_handlers.get_fsub_view()
+        await event.edit(text, buttons=buttons)
+
+    elif data == "adm_fsub_toggle":
+        is_on = admin_service.toggle_force_sub()
+        st = "تفعيل 🟢" if is_on else "تعطيل 🔴"
+        await event.answer(f"تم {st} الاشتراك الإجباري!", alert=True)
+        text, buttons = admin_handlers.get_fsub_view()
+        await event.edit(text, buttons=buttons)
+
+    elif data == "adm_fsub_reset":
+        admin_service.reset_all_users_subscription()
+        await event.answer("🔄 تم تصفير كاش اشتراك جميع المستخدمين بنجاح! سيتوجب عليهم التحقق مجدداً.", alert=True)
+
+    elif data.startswith("adm_fsub_del_"):
+        ch_id = int(data.replace("adm_fsub_del_", ""))
+        admin_service.delete_mandatory_channel(ch_id)
+        await event.answer("🗑️ تم حذف جهة الاشتراك بنجاح!", alert=True)
+        text, buttons = admin_handlers.get_fsub_view()
+        await event.edit(text, buttons=buttons)
+
+    elif data == "adm_fsub_add":
+        text = (
+            "➕ **إضافة جهة اشتراك إجباري جديدة**\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n"
+            "اختر نوع جهة الاشتراك التي ترغب بإضافتها:"
+        )
+        buttons = [
+            [
+                Button.inline("📢 قناة", data="adm_fsub_t_channel"),
+                Button.inline("👥 قروب", data="adm_fsub_t_group"),
+                Button.inline("🤖 بوت", data="adm_fsub_t_bot")
+            ],
+            [Button.inline("❌ إلغاء", data="adm_fsub_menu")]
+        ]
+        await event.edit(text, buttons=buttons)
+
+    elif data.startswith("adm_fsub_t_"):
+        ch_type = data.replace("adm_fsub_t_", "")
+        type_names = {'channel': 'القناة', 'group': 'القروب', 'bot': 'البوت'}
+        admin_handlers.ADMIN_STATES[event.sender_id] = {
+            'action': 'fsub_add_title',
+            'type': ch_type
+        }
+        await event.edit(
+            f"✏️ **أرسل الآن اسم {type_names.get(ch_type, 'الجهة')}** الذي سيظهر للمستخدمين في الأزرار (مثال: قناة الأفلام الرسمية):\n\n"
+            "• للإلغاء في أي وقت، أرسل `/cancel`."
+        )
+
+    elif data == "adm_bcast_menu":
+        text, buttons = admin_handlers.get_bcast_menu_view()
+        await event.edit(text, buttons=buttons)
+
+    elif data == "adm_bcast_start":
+        admin_handlers.ADMIN_STATES[event.sender_id] = {'action': 'broadcast_await_msg'}
+        await event.edit(
+            "📢 **أرسل الآن الرسالة أو الوسائط التي تريد إذاعتها لجميع المستخدمين:**\n\n"
+            "• يمكنك إرسال: نص، صورة، فيديو، ملف، أو إعادة توجيه (Forward).\n"
+            "• للإلغاء في أي وقت، أرسل `/cancel`."
+        )
+
+    elif data == "adm_bcast_confirm":
+        state = admin_handlers.ADMIN_STATES.get(event.sender_id)
+        if not state or state.get('action') != 'broadcast_confirm':
+            await event.answer("⚠️ لا توجد إذاعة جاهزة للتأكيد.", alert=True)
+            return
+        source_msg = state['msg']
+        del admin_handlers.ADMIN_STATES[event.sender_id]
+        await event.delete()
+        user_ids = admin_service.get_all_user_ids()
+        asyncio.create_task(admin_handlers.run_broadcast(bot, event.chat_id, source_msg, user_ids))
+
+    elif data == "adm_bcast_cancel":
+        if event.sender_id in admin_handlers.ADMIN_STATES:
+            del admin_handlers.ADMIN_STATES[event.sender_id]
+        await event.answer("تم إلغاء الإذاعة.", alert=True)
+        text, buttons = admin_handlers.get_bcast_menu_view()
+        await event.edit(text, buttons=buttons)
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 6. SERIES SEASONS & EPISODES BROWSING
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 @bot.on(events.CallbackQuery(pattern=r'^series_(\d+)'))
 async def series_card_handler(event):
+    admin_service.mark_user_interacted(event.sender_id)
     item_id = int(event.pattern_match.group(1))
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM media_items WHERE id = ?", (item_id,))
-    row = cur.fetchone()
-    conn.close()
-
-    if not row:
+    item = get_media_item_by_id(item_id)
+    if not item:
         await event.answer("⚠️ المسلسل غير متوفر.", alert=True)
         return
 
-    item = dict(row)
     series_title = item['series_title']
     seasons = get_series_seasons(series_title)
 
@@ -192,28 +451,24 @@ async def series_card_handler(event):
 
     text = (
         f"📺 **{series_title}**\n"
-        f"-------------------------------------\n"
-        f"• عدد المواسم: **{len(seasons)}**\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"• عدد المواسم المتوفرة: **{len(seasons)}**\n"
         f"• اختر الموسم المطلوب لعرض حلقاته:"
     )
     await event.edit(text, buttons=season_buttons)
 
 @bot.on(events.CallbackQuery(pattern=r'^season_(\d+)_(\d+)'))
 async def season_episodes_handler(event):
+    admin_service.mark_user_interacted(event.sender_id)
     item_id = int(event.pattern_match.group(1))
     season_num = int(event.pattern_match.group(2))
 
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT series_title FROM media_items WHERE id = ?", (item_id,))
-    row = cur.fetchone()
-    conn.close()
-
-    if not row:
+    item = get_media_item_by_id(item_id)
+    if not item:
         await event.answer("⚠️ حدث خطأ.", alert=True)
         return
 
-    series_title = row['series_title']
+    series_title = item['series_title']
     episodes = get_season_episodes(series_title, season_num)
 
     if not episodes:
@@ -238,36 +493,25 @@ async def season_episodes_handler(event):
 
     text = (
         f"📺 **{series_title}**\n"
-        f"-------------------------------------\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
         f"📍 **الموسم {season_num} — اختر الحلقة المناسبة :**"
     )
     await event.edit(text, buttons=episode_buttons)
 
 @bot.on(events.CallbackQuery(pattern=r'^play_ep_(\d+)'))
 async def play_episode_handler(event):
+    admin_service.mark_user_interacted(event.sender_id)
     ep_id = int(event.pattern_match.group(1))
 
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM media_items WHERE id = ?", (ep_id,))
-    row = cur.fetchone()
-    conn.close()
-
-    if not row:
+    item = get_media_item_by_id(ep_id)
+    if not item:
         await event.answer("⚠️ الحلقة غير متوفرة.", alert=True)
         return
 
-    item = dict(row)
     caption = format_caption(item)
     await event.answer("⏳ جاري تحضير الحلقة...")
 
     status_msg = await event.reply("⏳ جاري تجهيز الفيديو وإرساله إليك...")
-
-    async def update_status(text):
-        try:
-            await status_msg.edit(text)
-        except Exception:
-            pass
 
     next_ep = get_next_episode(item['series_title'], item['season_num'], item['episode_num'])
     buttons = []
@@ -279,10 +523,12 @@ async def play_episode_handler(event):
     ])
 
     try:
-        target_msg_id = await ensure_transferred(item, status_callback=update_status)
-        
-        # Now fetch from STORAGE_CHANNEL (where bot is admin) and send
-        storage_msg = await bot.get_messages(STORAGE_CHANNEL, ids=target_msg_id)
+        target_msg_id = item.get('target_msg_id')
+        if not target_msg_id:
+            await status_msg.edit("⚠️ الحلقة قيد التجهيز والنقل، يرجى المحاولة بعد قليل.")
+            return
+
+        storage_msg = await bot.get_messages(SERIES_CHANNEL, ids=target_msg_id)
         if storage_msg and storage_msg.media:
             await bot.send_file(
                 event.chat_id,
@@ -291,33 +537,28 @@ async def play_episode_handler(event):
                 supports_streaming=True,
                 buttons=buttons
             )
+            admin_service.log_delivery(event.chat_id, item['id'], 'series', item['series_title'])
             await status_msg.delete()
         else:
             await status_msg.edit("⚠️ تعذر إرسال الفيديو من القناة الرئيسية.")
     except Exception as e:
         await status_msg.edit(f"⚠️ حدث خطأ أثناء تجهيز الفيديو: {e}")
 
-COVER_IMAGE_PATH = os.path.join(os.path.dirname(__file__), "custom_cover.jpg")
-THUMB_IMAGE_PATH = os.path.join(os.path.dirname(__file__), "custom_thumb_320.jpg")
-
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 7. MOVIE DELIVERY
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def deliver_movie_by_id(chat_id, movie_id, callback_event=None, reply_to=None):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM media_items WHERE id = ?", (movie_id,))
-    row = cur.fetchone()
-    conn.close()
+    admin_service.mark_user_interacted(chat_id)
+    item = get_media_item_by_id(movie_id)
 
-    if not row:
+    if not item:
         if callback_event:
             await callback_event.answer("⚠️ الفيلم غير متوفر.", alert=True)
         elif reply_to:
             await bot.send_message(chat_id, "⚠️ الفيلم غير متوفر.", reply_to=reply_to)
         return
 
-    item = dict(row)
     caption = format_caption(item)
-    mb = round(item['file_size'] / (1024 * 1024))
-    title = item['clean_title'].replace('🎬', '').strip()
 
     if callback_event:
         await callback_event.answer("⏳ جاري إرسال الفيلم فوراً...")
@@ -325,9 +566,13 @@ async def deliver_movie_by_id(chat_id, movie_id, callback_event=None, reply_to=N
     try:
         target_msg_id = item.get('target_msg_id')
         if not target_msg_id:
-            target_msg_id = await ensure_transferred(item)
+            if callback_event:
+                await callback_event.answer("⚠️ الفيلم قيد التجهيز والنقل، يرجى المحاولة بعد قليل.", alert=True)
+            elif reply_to:
+                await bot.send_message(chat_id, "⚠️ الفيلم قيد التجهيز والنقل، يرجى المحاولة بعد قليل.", reply_to=reply_to)
+            return
 
-        storage_msg = await bot.get_messages(STORAGE_CHANNEL, ids=target_msg_id)
+        storage_msg = await bot.get_messages(MOVIES_CHANNEL, ids=target_msg_id)
         if storage_msg and storage_msg.media:
             await bot.send_file(
                 chat_id,
@@ -335,6 +580,7 @@ async def deliver_movie_by_id(chat_id, movie_id, callback_event=None, reply_to=N
                 caption=caption,
                 supports_streaming=True
             )
+            admin_service.log_delivery(chat_id, item['id'], 'movie', item['clean_title'])
         else:
             await bot.send_message(chat_id, "⚠️ تعذر جلب ملف الفيلم من القناة الرئيسية.", reply_to=reply_to)
     except Exception as e:
@@ -350,16 +596,37 @@ async def play_movie_handler(event):
 async def back_search_handler(event):
     await event.edit("🔍 اكتب اسم أي فيلم أو مسلسل في الشات للبحث:")
 
-async def run_both():
-    print("Connecting User Client...")
-    await user_client.connect()
-    print("Starting Bot @zxeeabot...")
-    await bot.start(bot_token=BOT_TOKEN)
-    print("Both User Client and Bot are LIVE and connected!")
-    await asyncio.gather(
-        bot.run_until_disconnected(),
-        user_client.run_until_disconnected()
-    )
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 8. MAIN ENTRY POINT WITH RECONNECT RESILIENCE
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def main():
+    while True:
+        try:
+            print("Starting Bot @zxeeabot...")
+            await bot.start(bot_token=BOT_TOKEN)
+            me = await bot.get_me()
+            print(f"Bot @{me.username} ({me.first_name}) is LIVE and serving users with Admin Panel & Instant Search!")
+
+            # Set Bot Menu Commands (Start & Support)
+            try:
+                from telethon.tl.functions.bots import SetBotCommandsRequest
+                from telethon.tl.types import BotCommand, BotCommandScopeDefault
+                await bot(SetBotCommandsRequest(
+                    scope=BotCommandScopeDefault(),
+                    lang_code='',
+                    commands=[
+                        BotCommand(command="start", description="🚀 بدء تشغيل البوت والبحث"),
+                        BotCommand(command="support", description="👨‍💻 الدعم الفني والمساعدة")
+                    ]
+                ))
+                print("Bot menu commands registered successfully!")
+            except Exception as cmd_err:
+                print(f"Notice setting bot commands: {cmd_err}")
+
+            await bot.run_until_disconnected()
+        except Exception as e:
+            print(f"Bot disconnected ({e}). Reconnecting in 5s...", flush=True)
+            await asyncio.sleep(5)
 
 if __name__ == "__main__":
-    asyncio.run(run_both())
+    asyncio.run(main())
