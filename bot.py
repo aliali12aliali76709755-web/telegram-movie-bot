@@ -2,6 +2,7 @@ import asyncio
 import os
 import sys
 import time
+import re
 
 sys.stdout.reconfigure(encoding='utf-8')
 import cryptg
@@ -64,6 +65,54 @@ def format_caption(item, storage_msg=None):
             f"🌟 **الجودة: {item['quality']}**\n"
             f"✨ **عبر: {BOT_USERNAME}**"
         )
+
+def verify_content_integrity(item, storage_msg) -> bool:
+    """
+    Validates that the file in storage_msg actually corresponds to the requested item.
+    Prevents delivering mismatched media caused by legacy interleaved IDs.
+    """
+    if not storage_msg:
+        return False
+
+    msg_text = (storage_msg.text or "").lower()
+    file_name = ""
+    if storage_msg.media and hasattr(storage_msg.media, 'document') and storage_msg.media.document:
+        for attr in storage_msg.media.document.attributes:
+            if hasattr(attr, 'file_name') and attr.file_name:
+                file_name = attr.file_name.lower()
+                break
+
+    combined = f"{msg_text} {file_name}".strip()
+    if not combined:
+        return True  # Minimal metadata; allow delivery
+
+    expected_titles = []
+    if item.get('series_title'):
+        expected_titles.append(str(item['series_title']))
+    if item.get('clean_title'):
+        expected_titles.append(str(item['clean_title']))
+    if item.get('title'):
+        expected_titles.append(str(item['title']))
+
+    all_words = []
+    for t in expected_titles:
+        for w in re.findall(r'[\w]+', t):
+            if len(w) >= 3 and not re.match(r'^\d+$', w):
+                all_words.append(w.lower())
+
+    stop_words = {
+        'season', 'episode', 'series', 'movie', 'bluray', 'web', 'x264', 'x265',
+        '1080p', '720p', '480p', 'الموسم', 'الحلقة', 'فيلم', 'مسلسل', 'مترجم', 'مدبلج'
+    }
+    distinctive = [w for w in all_words if w not in stop_words]
+    if not distinctive:
+        return True
+
+    for w in distinctive:
+        if w in combined:
+            return True
+
+    return False
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 1. ADMIN COMMANDS & STATE HANDLER
@@ -539,6 +588,11 @@ async def play_episode_handler(event):
 
         storage_msg = await bot.get_messages(SERIES_CHANNEL, ids=target_msg_id)
         if storage_msg and storage_msg.media:
+            if not verify_content_integrity(item, storage_msg):
+                print(f"⚠️ Content Integrity Mismatch for series ep #{item['id']} ({item.get('series_title')}) vs storage msg #{target_msg_id}")
+                await status_msg.edit("⚠️ جاري تحديث بيانات هذه الحلقة لضمان دقة المحتوى 100%، يرجى المحاولة بعد قليل.")
+                return
+
             caption = format_caption(item, storage_msg=storage_msg)
             await bot.send_file(
                 event.chat_id,
@@ -582,6 +636,15 @@ async def deliver_movie_by_id(chat_id, movie_id, callback_event=None, reply_to=N
 
         storage_msg = await bot.get_messages(MOVIES_CHANNEL, ids=target_msg_id)
         if storage_msg and storage_msg.media:
+            if not verify_content_integrity(item, storage_msg):
+                print(f"⚠️ Content Integrity Mismatch for movie #{item['id']} ({item.get('clean_title')}) vs storage msg #{target_msg_id}")
+                msg_fail = "⚠️ جاري تحديث بيانات هذا الفيلم لضمان دقة المحتوى 100%، يرجى المحاولة بعد قليل."
+                if callback_event:
+                    await callback_event.answer(msg_fail, alert=True)
+                elif reply_to:
+                    await bot.send_message(chat_id, msg_fail, reply_to=reply_to)
+                return
+
             caption = format_caption(item, storage_msg=storage_msg)
             await bot.send_file(
                 chat_id,
