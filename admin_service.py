@@ -3,7 +3,7 @@ import os
 import re
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 DEFAULT_MONGO_URI = "mongodb+srv://bosshoeheoejossnpe_db_user:eQl1SyEvwIRDMs1w@cluster0.etprryl.mongodb.net/?retryWrites=true&w=majority"
 DB_PATH = os.path.join(os.path.dirname(__file__), "movies.db")
@@ -51,29 +51,65 @@ def init_user_cache():
         print(f"init_user_cache sqlite warning: {e}")
 
 def get_mongo_db():
-    global _mongo_client
-    mongo_uri = os.environ.get("MONGO_URI", "").strip() or DEFAULT_MONGO_URI
-    if not mongo_uri:
+    try:
+        import database
+        return database.get_mongo_db()
+    except Exception as e:
+        print(f"Admin service get_mongo_db error: {e}")
         return None
-    if _mongo_client is None:
-        try:
-            from pymongo import MongoClient
-            try:
-                import certifi
-                ca_file = certifi.where()
-                _mongo_client = MongoClient(mongo_uri, tlsCAFile=ca_file, serverSelectionTimeoutMS=7000)
-            except Exception:
-                _mongo_client = MongoClient(mongo_uri, serverSelectionTimeoutMS=7000)
-            _mongo_client.admin.command('ping')
-        except Exception as e:
-            print(f"Admin service Mongo warning: {e}")
-            _mongo_client = None
-            return None
-    return _mongo_client['telegram_movie_bot']
-
+_SQLITE_INITED = False
 def get_connection():
+    global _SQLITE_INITED
     conn = sqlite3.connect(DB_PATH, timeout=30.0)
     conn.row_factory = sqlite3.Row
+    if not _SQLITE_INITED:
+        try:
+            c = conn.cursor()
+            c.executescript("""
+            CREATE TABLE IF NOT EXISTS bot_users (
+                user_id INTEGER PRIMARY KEY,
+                username TEXT,
+                first_name TEXT,
+                last_name TEXT,
+                first_seen TIMESTAMP,
+                last_seen TIMESTAMP,
+                is_subscribed INTEGER DEFAULT 0,
+                is_blocked INTEGER DEFAULT 0,
+                has_interacted INTEGER DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS search_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                query TEXT,
+                matched_title TEXT,
+                is_series INTEGER DEFAULT 0,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS delivery_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                media_id INTEGER,
+                media_type TEXT,
+                title TEXT,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS mandatory_channels (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT,
+                link_or_username TEXT,
+                chat_id TEXT,
+                channel_type TEXT DEFAULT 'channel',
+                is_active INTEGER DEFAULT 1
+            );
+            CREATE TABLE IF NOT EXISTS bot_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            );
+            """)
+            conn.commit()
+            _SQLITE_INITED = True
+        except Exception:
+            pass
     return conn
 
 # 1. USER TRACKING (HIGH-CONCURRENCY NON-BLOCKING)
@@ -132,8 +168,10 @@ def record_user(user_id: int, username: str = None, first_name: str = None, last
 
     threading.Thread(target=_bg_record, daemon=True).start()
 
+_RECENT_VERIFIED = {}  # user_id -> float timestamp (TTL 20 seconds)
+
 def mark_user_subscribed(user_id: int):
-    _SUBSCRIBED_CACHE.add(user_id)
+    _RECENT_VERIFIED[user_id] = time.time()
     def _bg_sub():
         now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
         mdb = get_mongo_db()
@@ -155,35 +193,34 @@ def mark_user_subscribed(user_id: int):
 
     threading.Thread(target=_bg_sub, daemon=True).start()
 
-def is_user_cached_subscribed(user_id: int) -> bool:
+def mark_user_unsubscribed(user_id: int):
+    _RECENT_VERIFIED.pop(user_id, None)
     if user_id in _SUBSCRIBED_CACHE:
-        return True
-    init_user_cache()
-    if user_id in _SUBSCRIBED_CACHE:
-        return True
+        _SUBSCRIBED_CACHE.discard(user_id)
+    def _bg_unsub():
+        mdb = get_mongo_db()
+        if mdb is not None:
+            try:
+                mdb['bot_users'].update_one({'user_id': user_id}, {'$set': {'is_subscribed': 0}})
+                return
+            except Exception:
+                pass
 
-    mdb = get_mongo_db()
-    if mdb is not None:
         try:
-            u = mdb['bot_users'].find_one({'user_id': user_id}, {'is_subscribed': 1})
-            if u and u.get('is_subscribed') == 1:
-                _SUBSCRIBED_CACHE.add(user_id)
-                return True
+            conn = get_connection()
+            c = conn.cursor()
+            c.execute("UPDATE bot_users SET is_subscribed = 0 WHERE user_id = ?", (user_id,))
+            conn.commit()
+            conn.close()
         except Exception:
             pass
 
-    try:
-        conn = get_connection()
-        c = conn.cursor()
-        c.execute("SELECT is_subscribed FROM bot_users WHERE user_id = ?", (user_id,))
-        row = c.fetchone()
-        conn.close()
-        if row and row['is_subscribed'] == 1:
-            _SUBSCRIBED_CACHE.add(user_id)
-            return True
-    except Exception:
-        pass
-    return False
+    threading.Thread(target=_bg_unsub, daemon=True).start()
+
+def is_user_cached_subscribed(user_id: int) -> bool:
+    # Strict short-lived verification: ONLY valid if verified in the last 20 seconds!
+    # If more than 20 seconds passed, caller MUST perform live Telegram check!
+    return (time.time() - _RECENT_VERIFIED.get(user_id, 0)) < 20
 
 def reset_all_users_subscription():
     mdb = get_mongo_db()
@@ -511,18 +548,73 @@ PERIOD_NAMES = {
     'all': "الشاملة (منذ البداية) 🌐"
 }
 
-def get_multi_period_stats():
-    conn = get_connection()
-    c = conn.cursor()
-    
-    stats = {}
-    periods = ['today', 'week', 'month', 'year', 'all']
-    
-    for p in periods:
-        f_seen = TIMEFRAME_USER_FIRST_SEEN[p]
-        l_seen = TIMEFRAME_USER_LAST_SEEN[p]
-        t_sql = TIMEFRAME_SQL[p]
-        
+_STATS_CACHE = {}  # period -> (timestamp, data)
+
+def get_stats_for_period(p: str):
+    now_ts = time.time()
+    if p in _STATS_CACHE:
+        cached_ts, cached_data = _STATS_CACHE[p]
+        if now_ts - cached_ts < 30:
+            return cached_data
+
+    mdb = get_mongo_db()
+    if mdb is not None:
+        try:
+            now_dt = datetime.utcnow()
+            date_filters = {
+                'today': now_dt.strftime('%Y-%m-%d 00:00:00'),
+                'week': (now_dt - timedelta(days=7)).strftime('%Y-%m-%d 00:00:00'),
+                'month': now_dt.strftime('%Y-%m-01 00:00:00'),
+                'year': now_dt.strftime('%Y-01-01 00:00:00'),
+                'all': None
+            }
+            start_str = date_filters.get(p)
+            u_col = mdb['bot_users']
+            s_col = mdb['search_logs']
+            d_col = mdb['delivery_logs']
+
+            if p == 'all' or not start_str:
+                tot_u = u_col.count_documents({})
+                new_u = tot_u
+                ret_u = 0
+                idl_u = u_col.count_documents({'is_subscribed': 0, 'has_interacted': 0})
+                sub_u = u_col.count_documents({'is_subscribed': 1})
+                tot_s = s_col.count_documents({})
+                mov_d = d_col.count_documents({'media_type': 'movie'})
+                ser_d = d_col.count_documents({'media_type': 'series'})
+            else:
+                tot_u = u_col.count_documents({'last_seen': {'$gte': start_str}})
+                new_u = u_col.count_documents({'first_seen': {'$gte': start_str}})
+                ret_u = u_col.count_documents({'first_seen': {'$lt': start_str}, 'last_seen': {'$gte': start_str}})
+                idl_u = u_col.count_documents({'is_subscribed': 0, 'has_interacted': 0, 'first_seen': {'$gte': start_str}})
+                sub_u = u_col.count_documents({'is_subscribed': 1, 'last_seen': {'$gte': start_str}})
+                tot_s = s_col.count_documents({'timestamp': {'$gte': start_str}})
+                mov_d = d_col.count_documents({'media_type': 'movie', 'timestamp': {'$gte': start_str}})
+                ser_d = d_col.count_documents({'media_type': 'series', 'timestamp': {'$gte': start_str}})
+
+            res = {
+                'total_users': tot_u,
+                'idle_users': idl_u,
+                'subscribed_users': sub_u,
+                'total_searches': tot_s,
+                'new_users': new_u,
+                'returning_users': ret_u,
+                'movies_delivered': mov_d,
+                'series_delivered': ser_d,
+                'total_delivered': mov_d + ser_d
+            }
+            _STATS_CACHE[p] = (now_ts, res)
+            return res
+        except Exception as e:
+            print(f"get_stats_for_period mongo error: {e}")
+
+    try:
+        conn = get_connection()
+        c = conn.cursor()
+        f_seen = TIMEFRAME_USER_FIRST_SEEN.get(p, '1=1')
+        l_seen = TIMEFRAME_USER_LAST_SEEN.get(p, '1=1')
+        t_sql = TIMEFRAME_SQL.get(p, '1=1')
+
         if p == 'all':
             c.execute("SELECT COUNT(*) FROM bot_users")
         else:
@@ -559,7 +651,8 @@ def get_multi_period_stats():
         c.execute(f"SELECT COUNT(*) FROM delivery_logs WHERE media_type = 'series' AND {t_sql}")
         series_delivered = c.fetchone()[0]
 
-        stats[p] = {
+        conn.close()
+        res = {
             'total_users': total_users,
             'idle_users': idle_users,
             'subscribed_users': subscribed_users,
@@ -570,9 +663,18 @@ def get_multi_period_stats():
             'series_delivered': series_delivered,
             'total_delivered': movies_delivered + series_delivered
         }
+        _STATS_CACHE[p] = (now_ts, res)
+        return res
+    except Exception as e:
+        print(f"get_stats_for_period sqlite fallback error: {e}")
+        return {
+            'total_users': 0, 'idle_users': 0, 'subscribed_users': 0,
+            'total_searches': 0, 'new_users': 0, 'returning_users': 0,
+            'movies_delivered': 0, 'series_delivered': 0, 'total_delivered': 0
+        }
 
-    conn.close()
-    return stats
+def get_multi_period_stats():
+    return {p: get_stats_for_period(p) for p in ['today', 'week', 'month', 'year', 'all']}
 
 def format_period_report(p: str, data: dict) -> str:
     name = PERIOD_NAMES.get(p, p)
@@ -598,91 +700,89 @@ def get_top_50_movies():
     mdb = get_mongo_db()
     if mdb is not None:
         try:
-            col = mdb['media_items']
-            movies = list(col.find({'is_series': 0}, {'clean_title': 1}).sort('id', -1).limit(50))
-            return [{'title': m['clean_title'], 'req_count': 1} for m in movies]
-        except Exception:
-            pass
+            pipeline = [
+                {'$match': {'is_series': 0, 'matched_title': {'$ne': None}}},
+                {'$group': {'_id': '$matched_title', 'req_count': {'$sum': 1}}},
+                {'$sort': {'req_count': -1}},
+                {'$limit': 50}
+            ]
+            res = list(mdb['search_logs'].aggregate(pipeline))
+            rows = [{'title': r['_id'], 'req_count': r['req_count']} for r in res if r.get('_id')]
+            if len(rows) < 50:
+                existing = {r['title'] for r in rows}
+                col = mdb['media_items']
+                for m in col.find({'is_series': 0}, {'clean_title': 1}).sort('id', -1).limit(100):
+                    t = m.get('clean_title')
+                    if t and t not in existing and len(rows) < 50:
+                        rows.append({'title': t, 'req_count': 1})
+                        existing.add(t)
+            return rows[:50]
+        except Exception as e:
+            print(f"get_top_50_movies mongo error: {e}")
 
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("""
-    SELECT title, COUNT(*) as req_count
-    FROM (
-        SELECT title FROM delivery_logs WHERE media_type = 'movie'
-        UNION ALL
-        SELECT matched_title as title FROM search_logs WHERE is_series = 0 AND matched_title IS NOT NULL
-    )
-    WHERE title IS NOT NULL AND title != ''
-    GROUP BY title
-    ORDER BY req_count DESC
-    LIMIT 50
-    """)
-    rows = [dict(r) for r in c.fetchall()]
-    
-    if len(rows) < 50:
-        existing_titles = {r['title'] for r in rows}
+    try:
+        conn = get_connection()
+        c = conn.cursor()
         c.execute("""
-        SELECT DISTINCT clean_title as title
-        FROM media_items
-        WHERE is_series = 0
-        ORDER BY id DESC
-        LIMIT 100
+        SELECT title, COUNT(*) as req_count
+        FROM (
+            SELECT title FROM delivery_logs WHERE media_type = 'movie'
+            UNION ALL
+            SELECT matched_title as title FROM search_logs WHERE is_series = 0 AND matched_title IS NOT NULL
+        )
+        WHERE title IS NOT NULL AND title != ''
+        GROUP BY title
+        ORDER BY req_count DESC
+        LIMIT 50
         """)
-        for r in c.fetchall():
-            t = r['title']
-            if t not in existing_titles and len(rows) < 50:
-                rows.append({'title': t, 'req_count': 1})
-                existing_titles.add(t)
-
-    conn.close()
-    return rows[:50]
+        rows = [dict(r) for r in c.fetchall()]
+        conn.close()
+        return rows[:50]
+    except Exception as e:
+        print(f"get_top_50_movies fallback error: {e}")
+        return []
 
 def get_top_50_series():
     mdb = get_mongo_db()
     if mdb is not None:
         try:
-            col = mdb['media_items']
-            titles = col.distinct('series_title', {'is_series': 1})
-            res = []
-            for t in titles[:50]:
-                cnt = col.count_documents({'is_series': 1, 'series_title': t})
-                res.append({'title': t, 'req_count': cnt})
-            return sorted(res, key=lambda x: x['req_count'], reverse=True)
-        except Exception:
-            pass
+            pipeline = [
+                {'$match': {'is_series': 1, 'matched_title': {'$ne': None}}},
+                {'$group': {'_id': '$matched_title', 'req_count': {'$sum': 1}}},
+                {'$sort': {'req_count': -1}},
+                {'$limit': 50}
+            ]
+            res = list(mdb['search_logs'].aggregate(pipeline))
+            rows = [{'title': r['_id'], 'req_count': r['req_count']} for r in res if r.get('_id')]
+            if len(rows) < 50:
+                existing = {r['title'] for r in rows}
+                col = mdb['media_items']
+                for t in col.distinct('series_title', {'is_series': 1}):
+                    if t and t not in existing and len(rows) < 50:
+                        rows.append({'title': t, 'req_count': 1})
+                        existing.add(t)
+            return rows[:50]
+        except Exception as e:
+            print(f"get_top_50_series mongo error: {e}")
 
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("""
-    SELECT title, COUNT(*) as req_count
-    FROM (
-        SELECT title FROM delivery_logs WHERE media_type = 'series'
-        UNION ALL
-        SELECT matched_title as title FROM search_logs WHERE is_series = 1 AND matched_title IS NOT NULL
-    )
-    WHERE title IS NOT NULL AND title != ''
-    GROUP BY title
-    ORDER BY req_count DESC
-    LIMIT 50
-    """)
-    rows = [dict(r) for r in c.fetchall()]
-
-    if len(rows) < 50:
-        existing_titles = {r['title'] for r in rows}
+    try:
+        conn = get_connection()
+        c = conn.cursor()
         c.execute("""
-        SELECT series_title as title, COUNT(*) as ep_cnt
-        FROM media_items
-        WHERE is_series = 1
-        GROUP BY series_title
-        ORDER BY ep_cnt DESC
-        LIMIT 100
+        SELECT title, COUNT(*) as req_count
+        FROM (
+            SELECT title FROM delivery_logs WHERE media_type = 'series'
+            UNION ALL
+            SELECT matched_title as title FROM search_logs WHERE is_series = 1 AND matched_title IS NOT NULL
+        )
+        WHERE title IS NOT NULL AND title != ''
+        GROUP BY title
+        ORDER BY req_count DESC
+        LIMIT 50
         """)
-        for r in c.fetchall():
-            t = r['title']
-            if t not in existing_titles and len(rows) < 50:
-                rows.append({'title': t, 'req_count': r['ep_cnt']})
-                existing_titles.add(t)
-
-    conn.close()
-    return rows[:50]
+        rows = [dict(r) for r in c.fetchall()]
+        conn.close()
+        return rows[:50]
+    except Exception as e:
+        print(f"get_top_50_series fallback error: {e}")
+        return []

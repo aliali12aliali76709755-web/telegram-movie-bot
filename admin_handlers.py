@@ -77,8 +77,7 @@ def get_stats_menu_buttons():
     ]
 
 def get_period_stats_view(period: str):
-    all_stats = admin_service.get_multi_period_stats()
-    period_data = all_stats.get(period, all_stats['all'])
+    period_data = admin_service.get_stats_for_period(period)
     text = admin_service.format_period_report(period, period_data)
     buttons = [
         [
@@ -299,19 +298,22 @@ async def run_broadcast(bot, admin_chat_id: int, source_msg, user_ids: list):
         buttons=[[Button.inline("🏠 الرئيسية", data="adm_main")]]
     )
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 7. SUBSCRIPTION CHECK LOGIC
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-async def check_user_subscriptions(bot, user_id: int):
+_CHANNEL_ENTITY_CACHE = {}
+
+async def check_user_subscriptions(bot, user_id: int, force_live: bool = False):
     """
     Checks if a user is subscribed to all active mandatory channels/groups/bots.
+    Strictly verifies live membership so users who leave after subscribing cannot use the bot.
     Returns: (is_ok: bool, missing_list: list)
     """
     if not admin_service.is_force_sub_enabled():
         return True, []
 
-    # Check cache first
-    if admin_service.is_user_cached_subscribed(user_id):
+    if is_admin(user_id):
+        return True, []
+
+    # If not force_live, allow a 20-second fast window for consecutive clicks
+    if not force_live and admin_service.is_user_cached_subscribed(user_id):
         return True, []
 
     channels = admin_service.get_active_mandatory_channels()
@@ -321,7 +323,6 @@ async def check_user_subscriptions(bot, user_id: int):
     missing = []
     for ch in channels:
         ch_type = ch.get('channel_type', 'channel')
-        # Bots are bypassed upon verification request as requested
         if ch_type == 'bot':
             continue
 
@@ -329,39 +330,43 @@ async def check_user_subscriptions(bot, user_id: int):
         if not identifier:
             continue
 
-        # Clean identifier
         identifier_clean = identifier.strip()
         if "t.me/" in identifier_clean:
-            # Extract @username if public link
             parts = identifier_clean.split("t.me/")
             if len(parts) > 1 and not parts[1].startswith("+") and not parts[1].startswith("joinchat"):
                 identifier_clean = f"@{parts[1].split('/')[0]}"
 
         try:
-            # Try converting to int if it's chat_id
             if identifier_clean.startswith("-100") or identifier_clean.isdigit() or (identifier_clean.startswith("-") and identifier_clean[1:].isdigit()):
                 target_entity = int(identifier_clean)
             else:
                 target_entity = identifier_clean
 
-            entity = await bot.get_entity(target_entity)
+            entity = _CHANNEL_ENTITY_CACHE.get(str(target_entity))
+            if entity is None:
+                entity = await bot.get_entity(target_entity)
+                _CHANNEL_ENTITY_CACHE[str(target_entity)] = entity
+
             from telethon.tl.functions.channels import GetParticipantRequest
             await bot(GetParticipantRequest(channel=entity, participant=user_id))
         except UserNotParticipantError:
             missing.append(ch)
         except FloodWaitError as fwe:
-            print(f"Telegram FloodWait ({fwe.seconds}s) on check_user_subscriptions: bypassing verification to prevent bot stall")
-            return True, []
+            print(f"Telegram FloodWait ({fwe.seconds}s) on check_user_subscriptions")
+            if fwe.seconds < 3:
+                await asyncio.sleep(fwe.seconds + 0.5)
+            else:
+                return True, []
         except Exception as e:
-            # If bot cannot check or entity not accessible, log
-            print(f"Could not verify subscription in {ch['title']}: {e}")
-            # If chat admin required or channel private without bot admin, don't permanently fail user
+            print(f"Could not verify subscription in {ch.get('title')}: {e}")
             pass
 
     if missing:
+        # User is NOT a participant in all required channels! Mark unsubscribed!
+        admin_service.mark_user_unsubscribed(user_id)
         return False, missing
-    
-    # Mark user as subscribed in DB cache
+
+    # Confirmed subscribed right now!
     admin_service.mark_user_subscribed(user_id)
     return True, []
 
@@ -377,7 +382,8 @@ def build_fsub_prompt(missing_channels: list):
         url = ch.get('link_or_username', '')
         if not url.startswith('http'):
             url = f"https://t.me/{url.replace('@', '')}"
-        buttons.append([Button.url(f"{lbl} {ch['title']}", url=url)])
+        ch_title = (ch.get('title') or '').strip() or url.split('/')[-1]
+        buttons.append([Button.url(f"{lbl} {ch_title}", url=url)])
 
     buttons.append([Button.inline("✅ تحقق من الاشتراك", data="check_sub")])
     return text, buttons

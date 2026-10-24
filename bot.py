@@ -144,9 +144,9 @@ async def start_handler(event):
         last_name=getattr(sender, 'last_name', None)
     )
 
-    # Check Mandatory Subscription (bypass for admin)
+    # Check Mandatory Subscription (bypass for admin) - strictly live check!
     if not admin_handlers.is_admin(event.sender_id):
-        is_ok, missing = await admin_handlers.check_user_subscriptions(bot, event.sender_id)
+        is_ok, missing = await admin_handlers.check_user_subscriptions(bot, event.sender_id, force_live=True)
         if not is_ok:
             text, buttons = admin_handlers.build_fsub_prompt(missing)
             await event.reply(text, buttons=buttons)
@@ -188,9 +188,8 @@ async def general_message_handler(event):
     if not raw_text:
         return
 
-    # If it is any variant of /start (even with leading spaces or Arabic RTL markers)
+    # If it is any variant of /start, do not process here (already handled exclusively by start_handler)
     if re.search(r'^[\u200e\u200f]?/(start|ابدأ|بدء)', raw_text, re.I):
-        await start_handler(event)
         return
 
     if raw_text.startswith('/'):
@@ -334,7 +333,7 @@ async def general_message_handler(event):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 @bot.on(events.CallbackQuery(data=b"check_sub"))
 async def check_sub_callback(event):
-    is_ok, missing = await admin_handlers.check_user_subscriptions(bot, event.sender_id)
+    is_ok, missing = await admin_handlers.check_user_subscriptions(bot, event.sender_id, force_live=True)
     if is_ok:
         admin_service.mark_user_subscribed(event.sender_id)
         await event.answer("🎉 تم التحقق من اشتراكك بنجاح!", alert=False)
@@ -368,121 +367,124 @@ async def admin_callback_router(event):
         return
 
     data = event.data.decode('utf-8')
+    try:
+        if data == "adm_main":
+            text = admin_handlers.get_main_menu_text()
+            buttons = admin_handlers.get_main_menu_buttons()
+            await event.edit(text, buttons=buttons)
 
-    if data == "adm_main":
-        text = admin_handlers.get_main_menu_text()
-        buttons = admin_handlers.get_main_menu_buttons()
-        await event.edit(text, buttons=buttons)
+        elif data == "adm_close":
+            await event.delete()
 
-    elif data == "adm_close":
-        await event.delete()
+        elif data == "adm_stats_menu":
+            await event.edit(
+                "📊 **قسم الإحصائيات الدقيقة**\n━━━━━━━━━━━━━━━━━━━━━\nاختر الفترة الزمنية التي تريد عرض تفاصيلها:",
+                buttons=admin_handlers.get_stats_menu_buttons()
+            )
 
-    elif data == "adm_stats_menu":
-        await event.edit(
-            "📊 **قسم الإحصائيات الدقيقة**\n━━━━━━━━━━━━━━━━━━━━━\nاختر الفترة الزمنية التي تريد عرض تفاصيلها:",
-            buttons=admin_handlers.get_stats_menu_buttons()
-        )
+        elif data.startswith("adm_stat_"):
+            period = data.replace("adm_stat_", "")
+            text, buttons = admin_handlers.get_period_stats_view(period)
+            await event.edit(text, buttons=buttons)
 
-    elif data.startswith("adm_stat_"):
-        period = data.replace("adm_stat_", "")
-        text, buttons = admin_handlers.get_period_stats_view(period)
-        await event.edit(text, buttons=buttons)
+        elif data == "adm_top_menu":
+            await event.edit(
+                "🔝 **قائمة الأعمال الأكثر طلباً وبحثاً**\n━━━━━━━━━━━━━━━━━━━━━\nاختر نوع الأعمال لعرض توب 50:",
+                buttons=admin_handlers.get_top_menu_buttons()
+            )
 
-    elif data == "adm_top_menu":
-        await event.edit(
-            "🔝 **قائمة الأعمال الأكثر طلباً وبحثاً**\n━━━━━━━━━━━━━━━━━━━━━\nاختر نوع الأعمال لعرض توب 50:",
-            buttons=admin_handlers.get_top_menu_buttons()
-        )
+        elif data.startswith("adm_top_movies_"):
+            page = int(data.split("_")[-1])
+            text, buttons = admin_handlers.get_top_movies_view(page)
+            await event.edit(text, buttons=buttons)
 
-    elif data.startswith("adm_top_movies_"):
-        page = int(data.split("_")[-1])
-        text, buttons = admin_handlers.get_top_movies_view(page)
-        await event.edit(text, buttons=buttons)
+        elif data.startswith("adm_top_series_"):
+            page = int(data.split("_")[-1])
+            text, buttons = admin_handlers.get_top_series_view(page)
+            await event.edit(text, buttons=buttons)
 
-    elif data.startswith("adm_top_series_"):
-        page = int(data.split("_")[-1])
-        text, buttons = admin_handlers.get_top_series_view(page)
-        await event.edit(text, buttons=buttons)
+        elif data == "adm_fsub_menu":
+            text, buttons = admin_handlers.get_fsub_view()
+            await event.edit(text, buttons=buttons)
 
-    elif data == "adm_fsub_menu":
-        text, buttons = admin_handlers.get_fsub_view()
-        await event.edit(text, buttons=buttons)
+        elif data == "adm_fsub_toggle":
+            is_on = admin_service.toggle_force_sub()
+            st = "تفعيل 🟢" if is_on else "تعطيل 🔴"
+            await event.answer(f"تم {st} الاشتراك الإجباري!", alert=True)
+            text, buttons = admin_handlers.get_fsub_view()
+            await event.edit(text, buttons=buttons)
 
-    elif data == "adm_fsub_toggle":
-        is_on = admin_service.toggle_force_sub()
-        st = "تفعيل 🟢" if is_on else "تعطيل 🔴"
-        await event.answer(f"تم {st} الاشتراك الإجباري!", alert=True)
-        text, buttons = admin_handlers.get_fsub_view()
-        await event.edit(text, buttons=buttons)
+        elif data == "adm_fsub_reset":
+            admin_service.reset_all_users_subscription()
+            await event.answer("🔄 تم تصفير كاش اشتراك جميع المستخدمين بنجاح! سيتوجب عليهم التحقق مجدداً.", alert=True)
 
-    elif data == "adm_fsub_reset":
-        admin_service.reset_all_users_subscription()
-        await event.answer("🔄 تم تصفير كاش اشتراك جميع المستخدمين بنجاح! سيتوجب عليهم التحقق مجدداً.", alert=True)
+        elif data.startswith("adm_fsub_del_"):
+            ch_id = int(data.replace("adm_fsub_del_", ""))
+            admin_service.delete_mandatory_channel(ch_id)
+            await event.answer("🗑️ تم حذف جهة الاشتراك بنجاح!", alert=True)
+            text, buttons = admin_handlers.get_fsub_view()
+            await event.edit(text, buttons=buttons)
 
-    elif data.startswith("adm_fsub_del_"):
-        ch_id = int(data.replace("adm_fsub_del_", ""))
-        admin_service.delete_mandatory_channel(ch_id)
-        await event.answer("🗑️ تم حذف جهة الاشتراك بنجاح!", alert=True)
-        text, buttons = admin_handlers.get_fsub_view()
-        await event.edit(text, buttons=buttons)
+        elif data == "adm_fsub_add":
+            text = (
+                "➕ **إضافة جهة اشتراك إجباري جديدة**\n"
+                "━━━━━━━━━━━━━━━━━━━━━\n"
+                "اختر نوع جهة الاشتراك التي ترغب بإضافتها:"
+            )
+            buttons = [
+                [
+                    Button.inline("📢 قناة", data="adm_fsub_t_channel"),
+                    Button.inline("👥 قروب", data="adm_fsub_t_group"),
+                    Button.inline("🤖 بوت", data="adm_fsub_t_bot")
+                ],
+                [Button.inline("❌ إلغاء", data="adm_fsub_menu")]
+            ]
+            await event.edit(text, buttons=buttons)
 
-    elif data == "adm_fsub_add":
-        text = (
-            "➕ **إضافة جهة اشتراك إجباري جديدة**\n"
-            "━━━━━━━━━━━━━━━━━━━━━\n"
-            "اختر نوع جهة الاشتراك التي ترغب بإضافتها:"
-        )
-        buttons = [
-            [
-                Button.inline("📢 قناة", data="adm_fsub_t_channel"),
-                Button.inline("👥 قروب", data="adm_fsub_t_group"),
-                Button.inline("🤖 بوت", data="adm_fsub_t_bot")
-            ],
-            [Button.inline("❌ إلغاء", data="adm_fsub_menu")]
-        ]
-        await event.edit(text, buttons=buttons)
+        elif data.startswith("adm_fsub_t_"):
+            ch_type = data.replace("adm_fsub_t_", "")
+            type_names = {'channel': 'القناة', 'group': 'القروب', 'bot': 'البوت'}
+            admin_handlers.ADMIN_STATES[event.sender_id] = {
+                'action': 'fsub_add_title',
+                'type': ch_type
+            }
+            await event.edit(
+                f"✏️ **أرسل الآن اسم {type_names.get(ch_type, 'الجهة')}** الذي سيظهر للمستخدمين في الأزرار (مثال: قناة الأفلام الرسمية):\n\n"
+                "• للإلغاء في أي وقت، أرسل `/cancel`."
+            )
 
-    elif data.startswith("adm_fsub_t_"):
-        ch_type = data.replace("adm_fsub_t_", "")
-        type_names = {'channel': 'القناة', 'group': 'القروب', 'bot': 'البوت'}
-        admin_handlers.ADMIN_STATES[event.sender_id] = {
-            'action': 'fsub_add_title',
-            'type': ch_type
-        }
-        await event.edit(
-            f"✏️ **أرسل الآن اسم {type_names.get(ch_type, 'الجهة')}** الذي سيظهر للمستخدمين في الأزرار (مثال: قناة الأفلام الرسمية):\n\n"
-            "• للإلغاء في أي وقت، أرسل `/cancel`."
-        )
+        elif data == "adm_bcast_menu":
+            text, buttons = admin_handlers.get_bcast_menu_view()
+            await event.edit(text, buttons=buttons)
 
-    elif data == "adm_bcast_menu":
-        text, buttons = admin_handlers.get_bcast_menu_view()
-        await event.edit(text, buttons=buttons)
+        elif data == "adm_bcast_start":
+            admin_handlers.ADMIN_STATES[event.sender_id] = {'action': 'broadcast_await_msg'}
+            await event.edit(
+                "📢 **أرسل الآن الرسالة أو الوسائط التي تريد إذاعتها لجميع المستخدمين:**\n\n"
+                "• يمكنك إرسال: نص، صورة، فيديو، ملف، أو إعادة توجيه (Forward).\n"
+                "• للإلغاء في أي وقت، أرسل `/cancel`."
+            )
 
-    elif data == "adm_bcast_start":
-        admin_handlers.ADMIN_STATES[event.sender_id] = {'action': 'broadcast_await_msg'}
-        await event.edit(
-            "📢 **أرسل الآن الرسالة أو الوسائط التي تريد إذاعتها لجميع المستخدمين:**\n\n"
-            "• يمكنك إرسال: نص، صورة، فيديو، ملف، أو إعادة توجيه (Forward).\n"
-            "• للإلغاء في أي وقت، أرسل `/cancel`."
-        )
-
-    elif data == "adm_bcast_confirm":
-        state = admin_handlers.ADMIN_STATES.get(event.sender_id)
-        if not state or state.get('action') != 'broadcast_confirm':
-            await event.answer("⚠️ لا توجد إذاعة جاهزة للتأكيد.", alert=True)
-            return
-        source_msg = state['msg']
-        del admin_handlers.ADMIN_STATES[event.sender_id]
-        await event.delete()
-        user_ids = admin_service.get_all_user_ids()
-        asyncio.create_task(admin_handlers.run_broadcast(bot, event.chat_id, source_msg, user_ids))
-
-    elif data == "adm_bcast_cancel":
-        if event.sender_id in admin_handlers.ADMIN_STATES:
+        elif data == "adm_bcast_confirm":
+            state = admin_handlers.ADMIN_STATES.get(event.sender_id)
+            if not state or state.get('action') != 'broadcast_confirm':
+                await event.answer("⚠️ لا توجد إذاعة جاهزة للتأكيد.", alert=True)
+                return
+            source_msg = state['msg']
             del admin_handlers.ADMIN_STATES[event.sender_id]
-        await event.answer("تم إلغاء الإذاعة.", alert=True)
-        text, buttons = admin_handlers.get_bcast_menu_view()
-        await event.edit(text, buttons=buttons)
+            await event.delete()
+            user_ids = admin_service.get_all_user_ids()
+            asyncio.create_task(admin_handlers.run_broadcast(bot, event.chat_id, source_msg, user_ids))
+
+        elif data == "adm_bcast_cancel":
+            if event.sender_id in admin_handlers.ADMIN_STATES:
+                del admin_handlers.ADMIN_STATES[event.sender_id]
+            await event.answer("تم إلغاء الإذاعة.", alert=True)
+            text, buttons = admin_handlers.get_bcast_menu_view()
+            await event.edit(text, buttons=buttons)
+    except Exception as e:
+        print(f"admin_callback_router error on {data}: {e}", flush=True)
+        await event.answer(f"⚠️ خطأ: {e}", alert=True)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 6. SERIES SEASONS & EPISODES BROWSING
@@ -490,6 +492,14 @@ async def admin_callback_router(event):
 @bot.on(events.CallbackQuery(pattern=r'^series_(\d+)'))
 async def series_card_handler(event):
     admin_service.mark_user_interacted(event.sender_id)
+    if not admin_handlers.is_admin(event.sender_id):
+        is_ok, missing = await admin_handlers.check_user_subscriptions(bot, event.sender_id)
+        if not is_ok:
+            await event.answer("⚠️ يجب عليك الاشتراك في القنوات أولاً للمتابعة!", alert=True)
+            text, buttons = admin_handlers.build_fsub_prompt(missing)
+            await bot.send_message(event.chat_id, text, buttons=buttons)
+            return
+
     item_id = int(event.pattern_match.group(1))
     item = get_media_item_by_id(item_id)
     if not item:
@@ -522,6 +532,14 @@ async def series_card_handler(event):
 @bot.on(events.CallbackQuery(pattern=r'^season_(\d+)_(\d+)'))
 async def season_episodes_handler(event):
     admin_service.mark_user_interacted(event.sender_id)
+    if not admin_handlers.is_admin(event.sender_id):
+        is_ok, missing = await admin_handlers.check_user_subscriptions(bot, event.sender_id)
+        if not is_ok:
+            await event.answer("⚠️ يجب عليك الاشتراك في القنوات أولاً للمتابعة!", alert=True)
+            text, buttons = admin_handlers.build_fsub_prompt(missing)
+            await bot.send_message(event.chat_id, text, buttons=buttons)
+            return
+
     item_id = int(event.pattern_match.group(1))
     season_num = int(event.pattern_match.group(2))
 
@@ -563,6 +581,14 @@ async def season_episodes_handler(event):
 @bot.on(events.CallbackQuery(pattern=r'^play_ep_(\d+)'))
 async def play_episode_handler(event):
     admin_service.mark_user_interacted(event.sender_id)
+    if not admin_handlers.is_admin(event.sender_id):
+        is_ok, missing = await admin_handlers.check_user_subscriptions(bot, event.sender_id)
+        if not is_ok:
+            await event.answer("⚠️ يجب عليك الاشتراك في القنوات أولاً للمتابعة!", alert=True)
+            text, buttons = admin_handlers.build_fsub_prompt(missing)
+            await bot.send_message(event.chat_id, text, buttons=buttons)
+            return
+
     ep_id = int(event.pattern_match.group(1))
 
     item = get_media_item_by_id(ep_id)
@@ -616,6 +642,15 @@ async def play_episode_handler(event):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def deliver_movie_by_id(chat_id, movie_id, callback_event=None, reply_to=None):
     admin_service.mark_user_interacted(chat_id)
+    if not admin_handlers.is_admin(chat_id):
+        is_ok, missing = await admin_handlers.check_user_subscriptions(bot, chat_id)
+        if not is_ok:
+            if callback_event:
+                await callback_event.answer("⚠️ يجب عليك الاشتراك في القنوات أولاً للمتابعة!", alert=True)
+            text, buttons = admin_handlers.build_fsub_prompt(missing)
+            await bot.send_message(chat_id, text, buttons=buttons)
+            return
+
     item = get_media_item_by_id(movie_id)
 
     if not item:
