@@ -3,8 +3,16 @@ import os
 import sys
 import time
 import re
-
-sys.stdout.reconfigure(encoding='utf-8')
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+if hasattr(sys.stderr, 'reconfigure'):
+    try:
+        sys.stderr.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
 import cryptg
 from telethon import TelegramClient, events, Button
 from telethon.sessions import StringSession
@@ -581,8 +589,9 @@ async def admin_callback_router(event):
             admin_handlers.ADMIN_STATES[event.sender_id] = {'action': 'ai_await_key'}
             await event.edit(
                 "✏️ **أرسل الآن مفتاح الـ API الخاص بك في رسالة:**\n\n"
-                "• يدعم مفاتيح Google Gemini المجانية (تبدأ بـ `AIzaSy...`).\n"
-                "• يدعم أيضاً OpenAI أو Groq.\n"
+                "• يدعم جميع أنواع مفاتيح Google Gemini (الحديثة `AQ....` والسابقة `AIzaSy...`).\n"
+                "• يدعم أيضاً مفاتيح OpenRouter و Groq و DeepSeek و OpenAI و Anthropic.\n"
+                "• مزود بنظام تعزيز ذكي (AI Booster) لتقوية أي نموذج تلقائياً!\n"
                 "• للإلغاء في أي وقت، أرسل `/cancel`."
             )
 
@@ -595,6 +604,8 @@ async def admin_callback_router(event):
             ok, msg = ai_service.test_api_key(key)
             if ok:
                 await event.answer("✅ الاتصال ناجح ومفتاح الذكاء الاصطناعي يعمل بكفاءة 100%!", alert=True)
+                text, buttons = admin_handlers.get_ai_settings_view()
+                await event.edit(text, buttons=buttons)
             else:
                 await event.answer(f"❌ فشل الاختبار: {msg[:100]}", alert=True)
 

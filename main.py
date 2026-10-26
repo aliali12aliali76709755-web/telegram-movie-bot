@@ -30,6 +30,14 @@ class LogCapture:
             self.original.flush()
         except Exception:
             pass
+    def reconfigure(self, **kwargs):
+        if hasattr(self.original, 'reconfigure'):
+            try:
+                return self.original.reconfigure(**kwargs)
+            except Exception:
+                pass
+    def __getattr__(self, name):
+        return getattr(self.original, name)
 
 sys.stdout = LogCapture(sys.stdout)
 sys.stderr = LogCapture(sys.stderr)

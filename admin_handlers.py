@@ -66,21 +66,30 @@ def get_ai_settings_view():
     model = ai_service.get_ai_model()
 
     if key:
-        masked_key = f"{key[:7]}...{key[-4:]}" if len(key) > 12 else "****"
+        masked_key = f"{key[:8]}...{key[-4:]}" if len(key) > 12 else "****"
+        prov_labels = {
+            'gemini': 'Google Gemini AI',
+            'groq': 'Groq Superfast AI',
+            'openrouter': 'OpenRouter Gateway',
+            'openai': 'OpenAI ChatGPT',
+            'deepseek': 'DeepSeek AI',
+            'anthropic': 'Anthropic Claude'
+        }
+        prov_display = prov_labels.get(provider.lower(), provider.upper())
         status_text = (
-            f"🟢 **مفعل وجاهز للعمل**\n"
+            f"🟢 **مفعل وجاهز للعمل بكفاءة 100%**\n"
             f"• المفتاح: `{masked_key}`\n"
-            f"• المزود: **{provider.upper()}**\n"
-            f"• النموذج: `{model}`"
+            f"• المزود: **{prov_display}**\n"
+            f"• النموذج النشط: `{model}`\n"
+            f"• نظام التعزيز وتقوية النماذج (AI Booster): **مفعل وشغال ⚡**"
         )
     else:
         status_text = (
             "🔴 **غير مُعيّن حتى الآن**\n\n"
-            "💡 **كيفية الحصول على مفتاح مجاني 100% وبدون فيزا:**\n"
-            "1. ادخل إلى Google AI Studio:\n"
-            "   `https://aistudio.google.com/app/apikey`\n"
-            "2. سجّل بحساب جوجل واضغط **Create API key** ثم انسخه.\n"
-            "3. اضغط على الزر أدناه وأرسل المفتاح مباشرة هنا!"
+            "💡 **البوت يقبل ويدعم جميع أنواع المفاتيح:**\n"
+            "• مفاتيح Google Gemini (الحديثة `AQ.` والسابقة `AIzaSy`).\n"
+            "• مفاتيح OpenRouter و Groq و DeepSeek و OpenAI و Anthropic.\n"
+            "• حتى لو كان النموذج ضعيفاً، فنظام الـ Booster يقويه تلقائياً!"
         )
 
     text = (
