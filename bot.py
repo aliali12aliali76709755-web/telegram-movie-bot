@@ -16,6 +16,7 @@ from database import (
 )
 import admin_service
 import admin_handlers
+import ai_service
 
 API_ID = 32374871
 API_HASH = "88bae070f4b4fb8f348eb6a16e8879d2"
@@ -125,17 +126,22 @@ async def admin_cmd_handler(event):
     buttons = admin_handlers.get_main_menu_buttons()
     await event.reply(text, buttons=buttons)
 
-@bot.on(events.NewMessage(pattern=r'^/cancel', func=lambda e: e.is_private))
+@bot.on(events.NewMessage(pattern=r'^/(cancel|exit|الغاء|خروج)', func=lambda e: e.is_private))
 async def cancel_cmd_handler(event):
     if event.sender_id in admin_handlers.ADMIN_STATES:
         del admin_handlers.ADMIN_STATES[event.sender_id]
-        await event.reply("✅ تم إلغاء العملية الجارية والعودة للوضع الطبيعي.", buttons=Button.clear())
+    ai_service.set_user_ai_mode(event.sender_id, False)
+    ai_service.set_admin_ai_mode(event.sender_id, False)
+    await event.reply("✅ تم إلغاء العملية والعودة للوضع الطبيعي.", buttons=Button.clear())
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 2. START COMMAND HANDLER
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 @bot.on(events.NewMessage(pattern=r'^\s*[\u200e\u200f]?/(?:start|ابدأ|بدء)(?:\s+(.+))?', func=lambda e: e.is_private))
 async def start_handler(event):
+    ai_service.set_user_ai_mode(event.sender_id, False)
+    ai_service.set_admin_ai_mode(event.sender_id, False)
+
     sender = await event.get_sender()
     admin_service.record_user(
         event.sender_id,
@@ -163,9 +169,36 @@ async def start_handler(event):
 
     text = (
         "أهلاً بك في بوت الأفلام والمسلسلات 🎬🍿\n\n"
-        "أرسل فقط اسم الفيلم أو المسلسل، وسأجلبه لك فوراً للمشاهدة والتحميل!"
+        "• أرسل اسم أي فيلم أو مسلسل، وسأجلبه لك فوراً للمشاهدة والتحميل!\n"
+        "• **لا تتذكر اسم الفيلم؟** اضغط على **(🧠 باحث المشاهد)** واشرح ما تتذكره وسيتعرف عليه الذكاء الاصطناعي فوراً!"
     )
-    await event.reply(text)
+    buttons = [
+        [
+            Button.inline("🧠 باحث المشاهد بالذكاء الاصطناعي", data="ai_user_start"),
+            Button.inline("✨ اقترح لي أفلام", data="ai_user_suggest")
+        ]
+    ]
+    await event.reply(text, buttons=buttons)
+
+@bot.on(events.NewMessage(pattern=r'^/(ai|ذكاء)', func=lambda e: e.is_private))
+async def ai_cmd_handler(event):
+    if not admin_handlers.is_admin(event.sender_id):
+        is_ok, missing = await admin_handlers.check_user_subscriptions(bot, event.sender_id)
+        if not is_ok:
+            text, buttons = admin_handlers.build_fsub_prompt(missing)
+            await event.reply(text, buttons=buttons)
+            return
+
+    ai_service.set_user_ai_mode(event.sender_id, True)
+    text = (
+        "🧠 **باحث المشاهد والاقتراحات بالذكاء الاصطناعي 🎬**\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n"
+        "نسيت اسم فيلم أو تبحث عن عمل بمواصفات معينة؟\n\n"
+        "✨ اشرح لي أي مشهد، أو قصة، أو شخصيات، أو اطلب اقتراحات ذكية وسأساعدك وأوفر لك روابط المشاهدة والتحميل فوراً!\n\n"
+        "✍️ **أرسل وصفك أو طلبك الآن في رسالة:**"
+    )
+    buttons = [[Button.inline("❌ خروج من وضع الذكاء الاصطناعي", data="ai_user_exit")]]
+    await event.reply(text, buttons=buttons)
 
 @bot.on(events.NewMessage(pattern=r'^(/(support|help)|.*الدعم\s*الفني.*)', func=lambda e: e.is_private))
 async def support_handler(event):
@@ -269,6 +302,31 @@ async def general_message_handler(event):
             await event.reply(f"✅ **تمت إضافة {state['title']} بنجاح وتفعيل الفحص!**", buttons=buttons)
             return
 
+        elif action == 'ai_await_key':
+            key_input = event.text.strip()
+            del admin_handlers.ADMIN_STATES[event.sender_id]
+            status_msg = await event.reply("⏳ جاري اختبار وصلاحية المفتاح مع مزود الذكاء الاصطناعي...")
+            ok, res = ai_service.test_api_key(key_input)
+            if ok:
+                ai_service.set_ai_api_key(key_input)
+                text, buttons = admin_handlers.get_ai_settings_view()
+                await status_msg.edit(f"🎉 **تم حفظ واختبار مفتاح الـ API بنجاح!**\nالذكاء الاصطناعي مفعّل وجاهز لخدمة المستخدمين والمدير فوراً.", buttons=buttons)
+            else:
+                text, buttons = admin_handlers.get_ai_settings_view()
+                await status_msg.edit(f"❌ **فشل التحقق من المفتاح:**\n`{res}`\n\nيرجى التأكد من صحة المفتاح وإعادة المحاولة.", buttons=buttons)
+            return
+
+    # 1.5 Intercept Admin AI Assistant Dialogue
+    if admin_handlers.is_admin(event.sender_id) and ai_service.is_admin_in_ai_mode(event.sender_id):
+        wait_msg = await event.reply("🧠 **جاري التحليل واستدعاء البيانات الذكية...**")
+        ai_reply = ai_service.chat_with_admin_ai(event.sender_id, raw_text)
+        buttons = [
+            [Button.inline("🔄 مسح الذاكرة", data="adm_ai_reset_mem")],
+            [Button.inline("❌ إنهاء المحادثة والعودة للوحة", data="adm_ai_exit")]
+        ]
+        await wait_msg.edit(ai_reply, buttons=buttons)
+        return
+
     # 2. Record User & Check Mandatory Subscription
     sender = await event.get_sender()
     admin_service.record_user(
@@ -284,6 +342,28 @@ async def general_message_handler(event):
             text, buttons = admin_handlers.build_fsub_prompt(missing)
             await event.reply(text, buttons=buttons)
             return
+
+    # 2.5 Intercept User Movie Detective & Recommender AI Mode
+    if ai_service.is_user_in_ai_mode(event.sender_id):
+        wait_msg = await event.reply("🧠 **جاري تحليل المشهد والبحث في المكتبة...**")
+        res = ai_service.chat_with_user_ai(event.sender_id, raw_text)
+        reply_text = res['response_text']
+        buttons = []
+        for s in res['series'][:3]:
+            buttons.append([Button.inline(f"📺 {s['series_title']} ({s['seasons_count']} مواسم)", data=f"series_{s['first_id']}")])
+        for m in res['movies'][:4]:
+            mb = round(m['file_size'] / (1024 * 1024))
+            clean_disp = re.sub(r'[*_~`]+', '', m['clean_title']).strip()
+            buttons.append([Button.inline(f"🎬 {clean_disp[:28]} ({m['quality']} | {mb}MB)", data=f"movie_{m['id']}")])
+
+        if res['movies'] or res['series']:
+            reply_text += "\n\n━━━━━━━━━━━━━━━━━━━━━\n🍿 **العمل متوفر في مكتبتنا! اضغط أدناه للمشاهدة فوراً:**"
+        elif res['searched_terms']:
+            reply_text += "\n\n━━━━━━━━━━━━━━━━━━━━━\n⚠️ **هذا العمل غير متوفر حالياً في مكتبة القنوات، وتم تسجيله لإضافته قريباً! 🎬**"
+
+        buttons.append([Button.inline("❌ خروج من وضع الذكاء الاصطناعي", data="ai_user_exit")])
+        await wait_msg.edit(reply_text, buttons=buttons)
+        return
 
     # 3. Handle Russian buttons residue cleanup
     query = event.text.strip()
@@ -306,7 +386,16 @@ async def general_message_handler(event):
     admin_service.log_search(event.sender_id, query, matched_title=matched, is_series=is_ser)
 
     if not series_list and not movies_list:
-        await event.reply(f"❌ لم يتم العثور على نتائج لـ: **{query}**\nجرّب كتابة الاسم بشكل مختلف.")
+        buttons = [
+            [Button.inline("🧠 تحليل المشهد بالذكاء الاصطناعي", data="ai_user_start")],
+            [Button.inline("✨ اقتراحات أفلام بالذكاء الاصطناعي", data="ai_user_suggest")]
+        ]
+        await event.reply(
+            f"❌ لم يتم العثور على نتائج مباشرة لـ: **{query}**\n\n"
+            "💡 **هل تشرح مشهداً أو قصة فيلم نسيت اسمه؟**\n"
+            "اضغط على زر الذكاء الاصطناعي أدناه وسأتعرف عليه فوراً!",
+            buttons=buttons
+        )
         return
 
     buttons = []
@@ -369,6 +458,7 @@ async def admin_callback_router(event):
     data = event.data.decode('utf-8')
     try:
         if data == "adm_main":
+            ai_service.set_admin_ai_mode(event.sender_id, False)
             text = admin_handlers.get_main_menu_text()
             buttons = admin_handlers.get_main_menu_buttons()
             await event.edit(text, buttons=buttons)
@@ -482,9 +572,99 @@ async def admin_callback_router(event):
             await event.answer("تم إلغاء الإذاعة.", alert=True)
             text, buttons = admin_handlers.get_bcast_menu_view()
             await event.edit(text, buttons=buttons)
+
+        elif data == "adm_ai_settings":
+            text, buttons = admin_handlers.get_ai_settings_view()
+            await event.edit(text, buttons=buttons)
+
+        elif data == "adm_ai_set_key":
+            admin_handlers.ADMIN_STATES[event.sender_id] = {'action': 'ai_await_key'}
+            await event.edit(
+                "✏️ **أرسل الآن مفتاح الـ API الخاص بك في رسالة:**\n\n"
+                "• يدعم مفاتيح Google Gemini المجانية (تبدأ بـ `AIzaSy...`).\n"
+                "• يدعم أيضاً OpenAI أو Groq.\n"
+                "• للإلغاء في أي وقت، أرسل `/cancel`."
+            )
+
+        elif data == "adm_ai_test_key":
+            key = ai_service.get_ai_api_key()
+            if not key:
+                await event.answer("⚠️ لم يتم إدخال أي مفتاح بعد!", alert=True)
+                return
+            await event.answer("⏳ جاري فحص واختبار المفتاح...")
+            ok, msg = ai_service.test_api_key(key)
+            if ok:
+                await event.answer("✅ الاتصال ناجح ومفتاح الذكاء الاصطناعي يعمل بكفاءة 100%!", alert=True)
+            else:
+                await event.answer(f"❌ فشل الاختبار: {msg[:100]}", alert=True)
+
+        elif data == "adm_ai_chat":
+            ai_service.set_admin_ai_mode(event.sender_id, True)
+            text, buttons = admin_handlers.get_admin_ai_chat_view()
+            await event.edit(text, buttons=buttons)
+
+        elif data == "adm_ai_reset_mem":
+            ai_service.clear_admin_ai_session(event.sender_id)
+            await event.answer("🔄 تم مسح الذاكرة وبدء جلسة حوارية جديدة بنجاح!", alert=True)
+
+        elif data == "adm_ai_exit":
+            ai_service.set_admin_ai_mode(event.sender_id, False)
+            text = admin_handlers.get_main_menu_text()
+            buttons = admin_handlers.get_main_menu_buttons()
+            await event.edit(text, buttons=buttons)
     except Exception as e:
         print(f"admin_callback_router error on {data}: {e}", flush=True)
         await event.answer(f"⚠️ خطأ: {e}", alert=True)
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 5.5 USER AI CALLBACK ROUTER
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+@bot.on(events.CallbackQuery(pattern=r'^ai_user_'))
+async def ai_user_callback_handler(event):
+    data = event.data.decode('utf-8')
+    if not admin_handlers.is_admin(event.sender_id):
+        is_ok, missing = await admin_handlers.check_user_subscriptions(bot, event.sender_id)
+        if not is_ok:
+            await event.answer("⚠️ يجب عليك الاشتراك في القنوات أولاً للمتابعة!", alert=True)
+            text, buttons = admin_handlers.build_fsub_prompt(missing)
+            await bot.send_message(event.chat_id, text, buttons=buttons)
+            return
+
+    if data == "ai_user_start":
+        ai_service.set_user_ai_mode(event.sender_id, True)
+        text = (
+            "🧠 **باحث المشاهد بالذكاء الاصطناعي 🎬**\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n"
+            "نسيت اسم فيلم أو مسلسل شفته زمان؟\n"
+            "اشرح لي أي شيء تتذكره:\n"
+            "• لقطة أو مشهد مميز عالق في ذهنك.\n"
+            "• قصة الفيلم أو فكرته وأحداثه.\n"
+            "• أسماء الشخصيات أو شكل الممثلين.\n\n"
+            "✨ وسأحلل المشهد، وأخبرك باسم العمل، وأجلبه لك فوراً للمشاهدة والتحميل المباشر!\n\n"
+            "✍️ **اشرح لي المشهد أو الفيلم الآن في رسالة:**"
+        )
+        buttons = [[Button.inline("❌ خروج من وضع الذكاء الاصطناعي", data="ai_user_exit")]]
+        await event.edit(text, buttons=buttons)
+
+    elif data == "ai_user_suggest":
+        ai_service.set_user_ai_mode(event.sender_id, True)
+        text = (
+            "✨ **قسم الاقتراحات الذكية للأفلام والمسلسلات 🍿**\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n"
+            "محتار ايش تشوف اليوم؟ قولي مزاجك أو طلبك:\n"
+            "• *\"اقترح لي فيلم رعب نفسي فيه نهاية صدمة\"*\n"
+            "• *\"اقترح لي أفضل مسلسل جريمة وغموض كوري\"*\n"
+            "• *\"بدي فيلم كوميدي عائلي ممتع لسهرة الليلة\"*\n\n"
+            "✨ وسأقترح عليك أقوى الأعمال مع إمكانية مشاهدتها وتحميلها فوراً!\n\n"
+            "✍️ **اكتب لي مزاجك أو نوع العمل وسأساعدك فوراً:**"
+        )
+        buttons = [[Button.inline("❌ خروج من وضع الذكاء الاصطناعي", data="ai_user_exit")]]
+        await event.edit(text, buttons=buttons)
+
+    elif data == "ai_user_exit":
+        ai_service.set_user_ai_mode(event.sender_id, False)
+        await event.answer("تم الخروج من وضع الذكاء الاصطناعي.")
+        await event.edit("🔍 اكتب اسم أي فيلم أو مسلسل في الشات للبحث العادي:")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 6. SERIES SEASONS & EPISODES BROWSING
@@ -729,6 +909,7 @@ async def main():
                     cmd_data = {
                         'commands': [
                             {'command': 'start', 'description': 'بدء تشغيل البوت والبحث 🎬'},
+                            {'command': 'ai', 'description': 'باحث المشاهد بالذكاء الاصطناعي 🧠'},
                             {'command': 'support', 'description': 'الدعم الفني والمساعدة 👨‍💻'}
                         ]
                     }

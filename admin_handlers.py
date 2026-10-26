@@ -50,10 +50,72 @@ def get_main_menu_buttons():
             Button.inline("🔝 الأكثر طلباً (توب 50)", data="adm_top_menu")
         ],
         [
+            Button.inline("🤖 المساعد الذكي للمدير", data="adm_ai_chat"),
+            Button.inline("⚙️ مفتاح AI API", data="adm_ai_settings")
+        ],
+        [
             Button.inline("🔄 تحديث اللوحة", data="adm_main"),
             Button.inline("❌ إغلاق", data="adm_close")
         ]
     ]
+
+def get_ai_settings_view():
+    import ai_service
+    key = ai_service.get_ai_api_key()
+    provider = ai_service.detect_provider(key) if key else "غير محدد"
+    model = ai_service.get_ai_model()
+
+    if key:
+        masked_key = f"{key[:7]}...{key[-4:]}" if len(key) > 12 else "****"
+        status_text = (
+            f"🟢 **مفعل وجاهز للعمل**\n"
+            f"• المفتاح: `{masked_key}`\n"
+            f"• المزود: **{provider.upper()}**\n"
+            f"• النموذج: `{model}`"
+        )
+    else:
+        status_text = (
+            "🔴 **غير مُعيّن حتى الآن**\n\n"
+            "💡 **كيفية الحصول على مفتاح مجاني 100% وبدون فيزا:**\n"
+            "1. ادخل إلى Google AI Studio:\n"
+            "   `https://aistudio.google.com/app/apikey`\n"
+            "2. سجّل بحساب جوجل واضغط **Create API key** ثم انسخه.\n"
+            "3. اضغط على الزر أدناه وأرسل المفتاح مباشرة هنا!"
+        )
+
+    text = (
+        "⚙️ **إعدادات ومفتاح الذكاء الاصطناعي (AI API)**\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📊 **الحالة الحالية:**\n{status_text}\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n"
+        "اختر الإجراء المطلوب:"
+    )
+
+    buttons = [
+        [Button.inline("🔑 إدخال / تحديث مفتاح API", data="adm_ai_set_key")],
+        [Button.inline("🧪 فحص واختبار المفتاح", data="adm_ai_test_key")],
+        [Button.inline("🔙 رجوع للرئيسية", data="adm_main")]
+    ]
+    return text, buttons
+
+def get_admin_ai_chat_view():
+    text = (
+        "🤖 **المساعد التنفيذي الذكي للمدير جاهز الآن!**\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n"
+        "أنا مستشارك ومساعدك الذكي، متصل مباشرة بقاعدة البيانات الحية ومسلح بأحدث استراتيجيات النمو والتسويق والإعلانات.\n\n"
+        "💡 **أمثلة لما يمكنك طلبه مني الآن:**\n"
+        "• 📊 *\"كم شخص دخل وما اشترك وشنو السبب؟\"*\n"
+        "• 📈 *\"اعطيني تحليل بالأرقام لأداء البوت وأكثر الأفلام طلباً اليوم\"*\n"
+        "• ✍️ *\"اقنع الزبون يدخل على بوت متجر منتجات رقمية (اكتب رسالة إذاعة تسويقية قوية)\"*\n"
+        "• 🎯 *\"اكتب لي رسالة تشويقية لتحفيز المستخدمين على التفاعل والبحث\"*\n"
+        "• 💡 *\"اقترح أفكاراً جديدة لزيادة المشتركين والأرباح\"*\n\n"
+        "✍️ **أرسل سؤالك أو طلبك في رسالة الآن مباشرة:**"
+    )
+    buttons = [
+        [Button.inline("🔄 مسح الذاكرة وبدء حوار جديد", data="adm_ai_reset_mem")],
+        [Button.inline("❌ إنهاء المحادثة والعودة للوحة", data="adm_main")]
+    ]
+    return text, buttons
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 2. STATS VIEW
