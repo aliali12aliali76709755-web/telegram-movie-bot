@@ -326,13 +326,17 @@ async def general_message_handler(event):
 
     # 1.5 Intercept Admin AI Assistant Dialogue
     if admin_handlers.is_admin(event.sender_id) and ai_service.is_admin_in_ai_mode(event.sender_id):
-        wait_msg = await event.reply("🧠 **جاري التحليل واستدعاء البيانات الذكية...**")
-        ai_reply = ai_service.chat_with_admin_ai(event.sender_id, raw_text)
+        try:
+            async with bot.action(event.chat_id, 'typing'):
+                ai_reply = ai_service.chat_with_admin_ai(event.sender_id, raw_text)
+        except Exception:
+            ai_reply = ai_service.chat_with_admin_ai(event.sender_id, raw_text)
+
         buttons = [
             [Button.inline("🔄 مسح الذاكرة", data="adm_ai_reset_mem")],
             [Button.inline("❌ إنهاء المحادثة والعودة للوحة", data="adm_ai_exit")]
         ]
-        await wait_msg.edit(ai_reply, buttons=buttons)
+        await event.reply(ai_reply, buttons=buttons)
         return
 
     # 2. Record User & Check Mandatory Subscription
@@ -353,8 +357,12 @@ async def general_message_handler(event):
 
     # 2.5 Intercept User Movie Detective & Recommender AI Mode
     if ai_service.is_user_in_ai_mode(event.sender_id):
-        wait_msg = await event.reply("🧠 **جاري تحليل المشهد والبحث في المكتبة...**")
-        res = ai_service.chat_with_user_ai(event.sender_id, raw_text)
+        try:
+            async with bot.action(event.chat_id, 'typing'):
+                res = ai_service.chat_with_user_ai(event.sender_id, raw_text)
+        except Exception:
+            res = ai_service.chat_with_user_ai(event.sender_id, raw_text)
+
         reply_text = res['response_text']
         buttons = []
         for s in res['series'][:3]:
@@ -365,12 +373,12 @@ async def general_message_handler(event):
             buttons.append([Button.inline(f"🎬 {clean_disp[:28]} ({m['quality']} | {mb}MB)", data=f"movie_{m['id']}")])
 
         if res['movies'] or res['series']:
-            reply_text += "\n\n━━━━━━━━━━━━━━━━━━━━━\n🍿 **العمل متوفر في مكتبتنا! اضغط أدناه للمشاهدة فوراً:**"
+            reply_text += "\n\n🍿 **العمل متوفر في قنواتنا — اختر للمشاهدة والتحميل فوراً:**"
         elif res['searched_terms']:
-            reply_text += "\n\n━━━━━━━━━━━━━━━━━━━━━\n⚠️ **هذا العمل غير متوفر حالياً في مكتبة القنوات، وتم تسجيله لإضافته قريباً! 🎬**"
+            reply_text += "\n\n⚠️ **هذا العمل غير متوفر حالياً في مكتبة القنوات، وتم تسجيله لإضافته قريباً.**"
 
         buttons.append([Button.inline("❌ خروج من وضع الذكاء الاصطناعي", data="ai_user_exit")])
-        await wait_msg.edit(reply_text, buttons=buttons)
+        await event.reply(reply_text, buttons=buttons)
         return
 
     # 3. Handle Russian buttons residue cleanup
@@ -644,15 +652,13 @@ async def ai_user_callback_handler(event):
     if data == "ai_user_start":
         ai_service.set_user_ai_mode(event.sender_id, True)
         text = (
-            "🧠 **باحث المشاهد بالذكاء الاصطناعي 🎬**\n"
+            "🧠 **المساعد السينمائي الذكي 🎬**\n"
             "━━━━━━━━━━━━━━━━━━━━━\n"
-            "نسيت اسم فيلم أو مسلسل شفته زمان؟\n"
-            "اشرح لي أي شيء تتذكره:\n"
-            "• لقطة أو مشهد مميز عالق في ذهنك.\n"
-            "• قصة الفيلم أو فكرته وأحداثه.\n"
-            "• أسماء الشخصيات أو شكل الممثلين.\n\n"
-            "✨ وسأحلل المشهد، وأخبرك باسم العمل، وأجلبه لك فوراً للمشاهدة والتحميل المباشر!\n\n"
-            "✍️ **اشرح لي المشهد أو الفيلم الآن في رسالة:**"
+            "أهلاً بك! يمكنك وصف أي فيلم أو مسلسل نسيت اسمه:\n"
+            "• لقطة أو مشهد محدد أو فكرة القصة.\n"
+            "• أسماء شخصيات أو أوصاف ممثلين.\n"
+            "• أو اطلب ترشيحاً لأي تصنيف سينمائي تفضله.\n\n"
+            "✍️ **تفضل بكتابة رسالتك وسأتعرف عليه فوراً:**"
         )
         buttons = [[Button.inline("❌ خروج من وضع الذكاء الاصطناعي", data="ai_user_exit")]]
         await event.edit(text, buttons=buttons)
@@ -660,14 +666,12 @@ async def ai_user_callback_handler(event):
     elif data == "ai_user_suggest":
         ai_service.set_user_ai_mode(event.sender_id, True)
         text = (
-            "✨ **قسم الاقتراحات الذكية للأفلام والمسلسلات 🍿**\n"
+            "✨ **الترشيحات السينمائية الذكية 🍿**\n"
             "━━━━━━━━━━━━━━━━━━━━━\n"
-            "محتار ايش تشوف اليوم؟ قولي مزاجك أو طلبك:\n"
-            "• *\"اقترح لي فيلم رعب نفسي فيه نهاية صدمة\"*\n"
-            "• *\"اقترح لي أفضل مسلسل جريمة وغموض كوري\"*\n"
-            "• *\"بدي فيلم كوميدي عائلي ممتع لسهرة الليلة\"*\n\n"
-            "✨ وسأقترح عليك أقوى الأعمال مع إمكانية مشاهدتها وتحميلها فوراً!\n\n"
-            "✍️ **اكتب لي مزاجك أو نوع العمل وسأساعدك فوراً:**"
+            "أهلاً بك! اطلب ترشيحاتك السينمائية مباشرة:\n"
+            "• *\"اقترح لي فيلم غموض بنهاية غير متوقعة\"*\n"
+            "• *\"أفضل مسلسلات الجريمة القصيرة\"*\n\n"
+            "✍️ **اكتب طلبك أو التصنيف المفضل وسأرشح لك الأفضل فوراً:**"
         )
         buttons = [[Button.inline("❌ خروج من وضع الذكاء الاصطناعي", data="ai_user_exit")]]
         await event.edit(text, buttons=buttons)
