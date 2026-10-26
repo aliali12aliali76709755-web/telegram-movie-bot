@@ -889,59 +889,73 @@ async def back_search_handler(event):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 8. MAIN ENTRY POINT WITH RECONNECT RESILIENCE
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-async def main():
-    while True:
+async def main(state_dict: dict = None):
+    def _bg_setup():
         try:
-            print("Starting Bot @zxeeabot...")
-            if not bot.is_connected():
-                await bot.connect()
-            if not await bot.is_user_authorized():
-                print("Bot not authorized, starting with token...")
-                await bot.start(bot_token=BOT_TOKEN)
-            me = await bot.get_me()
-            print(f"Bot @{me.username} ({me.first_name}) is LIVE and serving users with Admin Panel & Instant Search!")
-
-            # Register Bot Commands for Default and Arabic
-            try:
-                import urllib.request
-                import json
-                for lc in ['', 'ar']:
-                    cmd_data = {
-                        'commands': [
-                            {'command': 'start', 'description': 'بدء تشغيل البوت والبحث 🎬'},
-                            {'command': 'ai', 'description': 'باحث المشاهد بالذكاء الاصطناعي 🧠'},
-                            {'command': 'support', 'description': 'الدعم الفني والمساعدة 👨‍💻'}
-                        ]
-                    }
-                    if lc:
-                        cmd_data['language_code'] = lc
-                    req_cmd = urllib.request.Request(
-                        f"https://api.telegram.org/bot{BOT_TOKEN}/setMyCommands",
-                        data=json.dumps(cmd_data).encode('utf-8'),
-                        headers={'Content-Type': 'application/json'}
-                    )
-                    urllib.request.urlopen(req_cmd, timeout=5)
-
-                req_menu = urllib.request.Request(
-                    f"https://api.telegram.org/bot{BOT_TOKEN}/setChatMenuButton",
-                    data=json.dumps({'menu_button': {'type': 'commands'}}).encode('utf-8'),
+            import urllib.request
+            import json
+            for lc in ['', 'ar']:
+                cmd_data = {
+                    'commands': [
+                        {'command': 'start', 'description': 'بدء تشغيل البوت والبحث 🎬'},
+                        {'command': 'ai', 'description': 'باحث المشاهد بالذكاء الاصطناعي 🧠'},
+                        {'command': 'support', 'description': 'الدعم الفني والمساعدة 👨‍💻'}
+                    ]
+                }
+                if lc:
+                    cmd_data['language_code'] = lc
+                req_cmd = urllib.request.Request(
+                    f"https://api.telegram.org/bot{BOT_TOKEN}/setMyCommands",
+                    data=json.dumps(cmd_data).encode('utf-8'),
                     headers={'Content-Type': 'application/json'}
                 )
-                urllib.request.urlopen(req_menu, timeout=5)
-                print("Bot menu commands and ☰ Menu button registered successfully!")
-            except Exception as cmd_err:
-                print(f"Notice setting bot commands: {cmd_err}")
+                try:
+                    urllib.request.urlopen(req_cmd, timeout=8)
+                except Exception:
+                    pass
 
-            # Pre-load in-memory user cache to handle mass user concurrency instantly
+            req_menu = urllib.request.Request(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/setChatMenuButton",
+                data=json.dumps({'menu_button': {'type': 'commands'}}).encode('utf-8'),
+                headers={'Content-Type': 'application/json'}
+            )
             try:
-                admin_service.init_user_cache()
-            except Exception as cache_err:
-                print(f"Notice init user cache: {cache_err}")
+                urllib.request.urlopen(req_menu, timeout=8)
+            except Exception:
+                pass
+            print("Bot menu commands registered successfully in background!")
+        except Exception as e:
+            print(f"Notice setting bot commands: {e}")
+
+        try:
+            admin_service.init_user_cache()
+        except Exception as e:
+            print(f"Notice init user cache: {e}")
+
+    while True:
+        try:
+            print("Connecting Bot @zxeeabot...")
+            await bot.start(bot_token=BOT_TOKEN)
+            me = await bot.get_me()
+            print(f"Bot @{me.username} ({me.first_name}) is LIVE and LISTENING for messages!", flush=True)
+
+            if state_dict is not None:
+                state_dict["connected"] = True
+                state_dict["username"] = f"@{me.username}" if me.username else "@zxeeabot"
+                state_dict["id"] = me.id
+                state_dict["started_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+
+            # Run setup in background thread to avoid freezing the event loop
+            import threading
+            threading.Thread(target=_bg_setup, daemon=True).start()
 
             await bot.run_until_disconnected()
         except Exception as e:
-            print(f"Bot disconnected ({e}). Reconnecting in 5s...", flush=True)
-            await asyncio.sleep(5)
+            print(f"Bot disconnected ({e}). Reconnecting in 3s...", flush=True)
+            if state_dict is not None:
+                state_dict["connected"] = False
+                state_dict["last_error"] = str(e)
+            await asyncio.sleep(3)
 
 if __name__ == "__main__":
     asyncio.run(main())
