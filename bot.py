@@ -777,9 +777,9 @@ async def season_episodes_handler(event):
 async def play_episode_handler(event):
     admin_service.mark_user_interacted(event.sender_id)
     if not admin_handlers.is_admin(event.sender_id):
-        is_ok, missing = await admin_handlers.check_user_subscriptions(bot, event.sender_id)
+        is_ok, missing = await admin_handlers.check_user_subscriptions(bot, event.sender_id, force_live=True)
         if not is_ok:
-            await event.answer("⚠️ يجب عليك الاشتراك في القنوات أولاً للمتابعة!", alert=True)
+            await event.answer("⚠️ يجب عليك الاشتراك في القنوات والقروبات المطلوبة أولاً للمتابعة!", alert=True)
             text, buttons = admin_handlers.build_fsub_prompt(missing)
             await bot.send_message(event.chat_id, text, buttons=buttons)
             return
@@ -838,10 +838,10 @@ async def play_episode_handler(event):
 async def deliver_movie_by_id(chat_id, movie_id, callback_event=None, reply_to=None):
     admin_service.mark_user_interacted(chat_id)
     if not admin_handlers.is_admin(chat_id):
-        is_ok, missing = await admin_handlers.check_user_subscriptions(bot, chat_id)
+        is_ok, missing = await admin_handlers.check_user_subscriptions(bot, chat_id, force_live=True)
         if not is_ok:
             if callback_event:
-                await callback_event.answer("⚠️ يجب عليك الاشتراك في القنوات أولاً للمتابعة!", alert=True)
+                await callback_event.answer("⚠️ يجب عليك الاشتراك في القنوات والقروبات المطلوبة أولاً للمتابعة!", alert=True)
             text, buttons = admin_handlers.build_fsub_prompt(missing)
             await bot.send_message(chat_id, text, buttons=buttons)
             return

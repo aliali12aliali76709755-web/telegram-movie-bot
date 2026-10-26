@@ -218,11 +218,13 @@ def mark_user_unsubscribed(user_id: int):
     threading.Thread(target=_bg_unsub, daemon=True).start()
 
 def is_user_cached_subscribed(user_id: int) -> bool:
-    # Strict short-lived verification: ONLY valid if verified in the last 20 seconds!
-    # If more than 20 seconds passed, caller MUST perform live Telegram check!
-    return (time.time() - _RECENT_VERIFIED.get(user_id, 0)) < 20
+    # Strict short-lived verification: ONLY valid if verified in the last 15 seconds!
+    # If more than 15 seconds passed, caller MUST perform live Telegram check!
+    return (time.time() - _RECENT_VERIFIED.get(user_id, 0)) < 15
 
 def reset_all_users_subscription():
+    _RECENT_VERIFIED.clear()
+    _SUBSCRIBED_CACHE.clear()
     mdb = get_mongo_db()
     if mdb is not None:
         try:

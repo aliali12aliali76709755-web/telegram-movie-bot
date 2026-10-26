@@ -1,5 +1,9 @@
 import asyncio
+import os
+import json
 import time
+import urllib.request
+import urllib.error
 from telethon import events, Button
 from telethon.errors import (
     UserIsBlockedError,
@@ -11,6 +15,20 @@ from telethon.errors import (
     ChannelInvalidError
 )
 import admin_service
+
+def get_bot_token() -> str:
+    token = os.environ.get("BOT_TOKEN", "").strip()
+    if not token:
+        for p in ['token.txt', os.path.join(os.path.dirname(__file__), 'token.txt')]:
+            if os.path.exists(p):
+                try:
+                    with open(p, 'r', encoding='utf-8') as f:
+                        token = f.read().strip()
+                        if token:
+                            break
+                except Exception:
+                    pass
+    return token
 
 ADMIN_ID = 8625825633
 ADMIN_IDS = {8625825633, 6641619062}
@@ -369,7 +387,43 @@ async def run_broadcast(bot, admin_chat_id: int, source_msg, user_ids: list):
         buttons=[[Button.inline("🏠 الرئيسية", data="adm_main")]]
     )
 
-_CHANNEL_ENTITY_CACHE = {}
+def _check_single_channel_membership(token: str, ch: dict, user_id: int) -> bool:
+    """
+    Direct live HTTP verification using Telegram Bot API getChatMember.
+    Works for any channel or supergroup, public or private, without requiring user entities/access_hashes.
+    Returns True ONLY if user is currently an active member (creator, administrator, member, or active restricted).
+    """
+    identifier = ch.get('chat_id') or ch.get('link_or_username')
+    if not identifier:
+        return True
+
+    identifier_clean = str(identifier).strip()
+    if "t.me/" in identifier_clean:
+        parts = identifier_clean.split("t.me/")
+        if len(parts) > 1 and not parts[1].startswith("+") and not parts[1].startswith("joinchat"):
+            identifier_clean = f"@{parts[1].split('/')[0]}"
+
+    url = f"https://api.telegram.org/bot{token}/getChatMember?chat_id={identifier_clean}&user_id={user_id}"
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'MovieBot/1.0'})
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+            status = data.get('result', {}).get('status', '')
+            if status in ('creator', 'administrator', 'member'):
+                return True
+            elif status == 'restricted':
+                return bool(data.get('result', {}).get('is_member', False))
+            return False  # 'left', 'kicked', etc.
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode('utf-8', errors='ignore')
+        # User not found / not in channel / left -> definite False
+        if any(term in err_body for term in ['PARTICIPANT_ID_INVALID', 'user not found', 'USER_NOT_PARTICIPANT']):
+            return False
+        print(f"getChatMember HTTP {e.code} for {identifier_clean}: {err_body[:100]}")
+        return False
+    except Exception as e:
+        print(f"getChatMember error for {identifier_clean}: {e}")
+        return False
 
 async def check_user_subscriptions(bot, user_id: int, force_live: bool = False):
     """
@@ -383,7 +437,7 @@ async def check_user_subscriptions(bot, user_id: int, force_live: bool = False):
     if is_admin(user_id):
         return True, []
 
-    # If not force_live, allow a 20-second fast window for consecutive clicks
+    # If not force_live, allow a 15-second fast window for consecutive rapid clicks (e.g. season -> episode)
     if not force_live and admin_service.is_user_cached_subscribed(user_id):
         return True, []
 
@@ -391,49 +445,25 @@ async def check_user_subscriptions(bot, user_id: int, force_live: bool = False):
     if not channels:
         return True, []
 
-    missing = []
-    for ch in channels:
+    token = get_bot_token()
+    if not token:
+        return True, []
+
+    # Check all active channels concurrently
+    async def _verify_channel(ch):
         ch_type = ch.get('channel_type', 'channel')
         if ch_type == 'bot':
-            continue
+            return ch, True
+        is_sub = await asyncio.to_thread(_check_single_channel_membership, token, ch, user_id)
+        return ch, is_sub
 
-        identifier = ch.get('chat_id') or ch.get('link_or_username')
-        if not identifier:
-            continue
+    tasks = [_verify_channel(ch) for ch in channels]
+    results = await asyncio.gather(*tasks)
 
-        identifier_clean = identifier.strip()
-        if "t.me/" in identifier_clean:
-            parts = identifier_clean.split("t.me/")
-            if len(parts) > 1 and not parts[1].startswith("+") and not parts[1].startswith("joinchat"):
-                identifier_clean = f"@{parts[1].split('/')[0]}"
-
-        try:
-            if identifier_clean.startswith("-100") or identifier_clean.isdigit() or (identifier_clean.startswith("-") and identifier_clean[1:].isdigit()):
-                target_entity = int(identifier_clean)
-            else:
-                target_entity = identifier_clean
-
-            entity = _CHANNEL_ENTITY_CACHE.get(str(target_entity))
-            if entity is None:
-                entity = await bot.get_entity(target_entity)
-                _CHANNEL_ENTITY_CACHE[str(target_entity)] = entity
-
-            from telethon.tl.functions.channels import GetParticipantRequest
-            await bot(GetParticipantRequest(channel=entity, participant=user_id))
-        except UserNotParticipantError:
-            missing.append(ch)
-        except FloodWaitError as fwe:
-            print(f"Telegram FloodWait ({fwe.seconds}s) on check_user_subscriptions")
-            if fwe.seconds < 3:
-                await asyncio.sleep(fwe.seconds + 0.5)
-            else:
-                return True, []
-        except Exception as e:
-            print(f"Could not verify subscription in {ch.get('title')}: {e}")
-            pass
+    missing = [ch for ch, is_sub in results if not is_sub]
 
     if missing:
-        # User is NOT a participant in all required channels! Mark unsubscribed!
+        # User is NOT currently a member in all channels! Mark unsubscribed immediately!
         admin_service.mark_user_unsubscribed(user_id)
         return False, missing
 
@@ -443,8 +473,9 @@ async def check_user_subscriptions(bot, user_id: int, force_live: bool = False):
 
 def build_fsub_prompt(missing_channels: list):
     text = (
-        "⚠️ **عذراً عزيزي، يجب عليك الاشتراك في القنوات التالية أولاً لاستخدام البوت:**\n\n"
-        "اشترك في القنوات عبر الأزرار أدناه، ثم اضغط على زر **(✅ تحقق من الاشتراك)** للدخول فوراً:"
+        "⚠️ **عذراً عزيزي، يجب عليك الاشتراك في القنوات والقروبات التالية أولاً لاستخدام البوت:**\n\n"
+        "*(ملاحظة: البوت يفحص عضويتك تلقائياً، وفي حال مغادرة أي قناة سيتوقف البوت حتى تعود للاشتراك)*\n\n"
+        "اشترك عبر الأزرار أدناه، ثم اضغط على زر **(✅ تحقق من الاشتراك)** للدخول فوراً:"
     )
     buttons = []
     type_labels = {'channel': '📢', 'group': '👥', 'bot': '🤖'}
