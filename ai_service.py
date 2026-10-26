@@ -67,12 +67,12 @@ USER_AI_SYSTEM_PROMPT = """أنت مساعد سينمائي ذكي، متخصص 
 # PROVIDER DETECTOR & CASCADE CONFIGURATION
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 GEMINI_CASCADE = [
-    'gemini-3.5-flash-lite',
-    'gemini-flash-lite-latest',
-    'gemini-3.5-flash',
     'gemini-3.6-flash',
-    'gemini-3.1-flash-lite',
+    'gemini-3.5-flash',
+    'gemini-flash-latest',
+    'gemini-3.7-flash',
     'gemini-3.8-flash',
+    'gemini-3.5-flash-lite',
     'gemma-4-26b-a4b-it'
 ]
 
@@ -109,7 +109,7 @@ def set_ai_api_key(key: str):
 
 def get_ai_model() -> str:
     """Gets the configured AI model name."""
-    return admin_service.get_setting('ai_model', 'gemini-3.5-flash-lite')
+    return admin_service.get_setting('ai_model', 'gemini-3.6-flash')
 
 def set_ai_model(model: str):
     admin_service.set_setting('ai_model', model.strip())
@@ -185,7 +185,7 @@ def call_gemini_api(key: str, messages: list, system_prompt: str = None, max_tok
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
         try:
             req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'), headers=headers, method="POST")
-            with urllib.request.urlopen(req, timeout=14) as resp:
+            with urllib.request.urlopen(req, timeout=18) as resp:
                 data = json.loads(resp.read().decode('utf-8'))
                 candidates = data.get('candidates', [])
                 if candidates and 'content' in candidates[0] and 'parts' in candidates[0]['content']:
@@ -198,6 +198,8 @@ def call_gemini_api(key: str, messages: list, system_prompt: str = None, max_tok
         except urllib.error.HTTPError as e:
             err_body = e.read().decode('utf-8', errors='ignore')
             last_err = f"HTTP {e.code}: {err_body[:120]}"
+            if e.code == 429:
+                return None, "QUOTA_EXHAUSTED"
             # If 404 (model not found) or 503 (high demand spike), cascade immediately to next model
             continue
         except Exception as e:
@@ -368,6 +370,9 @@ def test_api_key(key: str) -> tuple:
         set_ai_provider(old_provider)
         set_ai_model(old_model)
 
+    if err == "QUOTA_EXHAUSTED" or "429" in str(err) or "quota" in str(err).lower():
+        return False, "المفتاح سليم لكن تم استهلاك الحد اليومي لمفتاح Google المجاني (20 طلب/يوم).\n💡 للحصول على آلاف الطلبات مجاناً دون توقف، استخدم مفتاح Groq المجاني (gsk_...) أو OpenRouter (sk-or-...)."
+
     return False, f"تعذر التحقق من المفتاح عبر المزودين المدعومين.\nآخر استجابة: {err}"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -469,9 +474,16 @@ def chat_with_user_ai(user_id: int, user_input: str):
                 'searched_terms': [user_input],
                 'error_code': None
             }
+        if err == "QUOTA_EXHAUSTED":
+            msg = (
+                "⚠️ **خدمة الذكاء الاصطناعي بلغت الحد اليومي للاستخدام المجاني مؤقتاً.**\n\n"
+                "💡 يمكنك كتابة اسم أي فيلم أو مسلسل تريده في الشات مباشرة، وسأجلبه لك فوراً من قنواتنا! 🎬"
+            )
+        else:
+            msg = "⚠️ عذراً عزيزي، حدث ضغط لحظي في خدمة الذكاء الاصطناعي.\nيرجى إعادة إرسال رسالتك أو كتابة اسم الفيلم مباشرة. 🎬"
         return {
             'success': False,
-            'response_text': f"⚠️ عذراً عزيزي، حدث ضغط لحظي في خدمة الذكاء الاصطناعي.\nيرجى إعادة إرسال رسالتك أو كتابة اسم الفيلم مباشرة. 🎬",
+            'response_text': msg,
             'movies': [],
             'series': [],
             'searched_terms': [],
@@ -625,6 +637,15 @@ def chat_with_admin_ai(admin_id: int, admin_input: str) -> str:
 
     response_text, err = call_ai_api(history, system_prompt=full_system_prompt, max_tokens=1500)
     if not response_text:
+        if err == "QUOTA_EXHAUSTED":
+            return (
+                "⚠️ **تنبيه للمدير: تم استهلاك الحد اليومي لمفتاح Google Gemini المجاني (20 طلب/يوم).**\n\n"
+                "💡 **لجعل الذكاء الاصطناعي يعمل بآلاف الطلبات مجاناً دون توقف:**\n"
+                "1. احصل على مفتاح مجاني فائق السرعة من **Groq** (`gsk_...`) من موقع console.groq.com (يعطيك آلاف الطلبات مجاناً يومياً دون انقطاع).\n"
+                "2. أو احصل على مفتاح مجاني من **OpenRouter** (`sk-or-...`) من موقع openrouter.ai.\n"
+                "3. أو فعّل الفوترة الرمزية في حساب Google Cloud لرفع الحد فوراً.\n\n"
+                "لتحديث المفتاح الآن، توجه إلى: **لوحة الإدارة ⚙️ > مفتاح AI API** وضع المفتاح الجديد."
+            )
         return f"⚠️ حدث خطأ أثناء الاتصال بمزود الذكاء الاصطناعي: `{err}`"
 
     history.append({'role': 'model', 'text': response_text})

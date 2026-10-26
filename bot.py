@@ -52,6 +52,15 @@ else:
 
 bot = TelegramClient(session_target, API_ID, API_HASH, connection_retries=None, retry_delay=3)
 
+async def safe_answer(event, *args, **kwargs):
+    """Safely answers a callback query without raising QueryIdInvalidError if expired."""
+    if not event:
+        return None
+    try:
+        return await event.answer(*args, **kwargs)
+    except Exception:
+        return None
+
 SEASON_NAMES = {
     1: "الأول", 2: "الثاني", 3: "الثالث", 4: "الرابع",
     5: "الخامس", 6: "السادس", 7: "السابع", 8: "الثامن",
@@ -314,7 +323,7 @@ async def general_message_handler(event):
             key_input = event.text.strip()
             del admin_handlers.ADMIN_STATES[event.sender_id]
             status_msg = await event.reply("⏳ جاري اختبار وصلاحية المفتاح مع مزود الذكاء الاصطناعي...")
-            ok, res = ai_service.test_api_key(key_input)
+            ok, res = await asyncio.to_thread(ai_service.test_api_key, key_input)
             if ok:
                 ai_service.set_ai_api_key(key_input)
                 text, buttons = admin_handlers.get_ai_settings_view()
@@ -328,9 +337,9 @@ async def general_message_handler(event):
     if admin_handlers.is_admin(event.sender_id) and ai_service.is_admin_in_ai_mode(event.sender_id):
         try:
             async with bot.action(event.chat_id, 'typing'):
-                ai_reply = ai_service.chat_with_admin_ai(event.sender_id, raw_text)
+                ai_reply = await asyncio.to_thread(ai_service.chat_with_admin_ai, event.sender_id, raw_text)
         except Exception:
-            ai_reply = ai_service.chat_with_admin_ai(event.sender_id, raw_text)
+            ai_reply = await asyncio.to_thread(ai_service.chat_with_admin_ai, event.sender_id, raw_text)
 
         buttons = [
             [Button.inline("🔄 مسح الذاكرة", data="adm_ai_reset_mem")],
@@ -359,22 +368,22 @@ async def general_message_handler(event):
     if ai_service.is_user_in_ai_mode(event.sender_id):
         try:
             async with bot.action(event.chat_id, 'typing'):
-                res = ai_service.chat_with_user_ai(event.sender_id, raw_text)
+                res = await asyncio.to_thread(ai_service.chat_with_user_ai, event.sender_id, raw_text)
         except Exception:
-            res = ai_service.chat_with_user_ai(event.sender_id, raw_text)
+            res = await asyncio.to_thread(ai_service.chat_with_user_ai, event.sender_id, raw_text)
 
-        reply_text = res['response_text']
+        reply_text = res.get('response_text', '')
         buttons = []
-        for s in res['series'][:3]:
+        for s in res.get('series', [])[:3]:
             buttons.append([Button.inline(f"📺 {s['series_title']} ({s['seasons_count']} مواسم)", data=f"series_{s['first_id']}")])
-        for m in res['movies'][:4]:
+        for m in res.get('movies', [])[:4]:
             mb = round(m['file_size'] / (1024 * 1024))
             clean_disp = re.sub(r'[*_~`]+', '', m['clean_title']).strip()
             buttons.append([Button.inline(f"🎬 {clean_disp[:28]} ({m['quality']} | {mb}MB)", data=f"movie_{m['id']}")])
 
-        if res['movies'] or res['series']:
+        if res.get('movies') or res.get('series'):
             reply_text += "\n\n🍿 **العمل متوفر في قنواتنا — اختر للمشاهدة والتحميل فوراً:**"
-        elif res['searched_terms']:
+        elif res.get('searched_terms'):
             reply_text += "\n\n⚠️ **هذا العمل غير متوفر حالياً في مكتبة القنوات، وتم تسجيله لإضافته قريباً.**"
 
         buttons.append([Button.inline("❌ خروج من وضع الذكاء الاصطناعي", data="ai_user_exit")])
@@ -606,16 +615,16 @@ async def admin_callback_router(event):
         elif data == "adm_ai_test_key":
             key = ai_service.get_ai_api_key()
             if not key:
-                await event.answer("⚠️ لم يتم إدخال أي مفتاح بعد!", alert=True)
+                await safe_answer(event, "⚠️ لم يتم إدخال أي مفتاح بعد!", alert=True)
                 return
-            await event.answer("⏳ جاري فحص واختبار المفتاح...")
-            ok, msg = ai_service.test_api_key(key)
+            await safe_answer(event, "⏳ جاري فحص واختبار المفتاح...")
+            ok, msg = await asyncio.to_thread(ai_service.test_api_key, key)
             if ok:
-                await event.answer("✅ الاتصال ناجح ومفتاح الذكاء الاصطناعي يعمل بكفاءة 100%!", alert=True)
+                await safe_answer(event, "✅ الاتصال ناجح ومفتاح الذكاء الاصطناعي يعمل بكفاءة 100%!", alert=True)
                 text, buttons = admin_handlers.get_ai_settings_view()
                 await event.edit(text, buttons=buttons)
             else:
-                await event.answer(f"❌ فشل الاختبار: {msg[:100]}", alert=True)
+                await safe_answer(event, f"❌ فشل الاختبار: {msg[:100]}", alert=True)
 
         elif data == "adm_ai_chat":
             ai_service.set_admin_ai_mode(event.sender_id, True)
@@ -624,7 +633,7 @@ async def admin_callback_router(event):
 
         elif data == "adm_ai_reset_mem":
             ai_service.clear_admin_ai_session(event.sender_id)
-            await event.answer("🔄 تم مسح الذاكرة وبدء جلسة حوارية جديدة بنجاح!", alert=True)
+            await safe_answer(event, "🔄 تم مسح الذاكرة وبدء جلسة حوارية جديدة بنجاح!", alert=True)
 
         elif data == "adm_ai_exit":
             ai_service.set_admin_ai_mode(event.sender_id, False)
@@ -633,7 +642,7 @@ async def admin_callback_router(event):
             await event.edit(text, buttons=buttons)
     except Exception as e:
         print(f"admin_callback_router error on {data}: {e}", flush=True)
-        await event.answer(f"⚠️ خطأ: {e}", alert=True)
+        await safe_answer(event, f"⚠️ خطأ: {e}", alert=True)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 5.5 USER AI CALLBACK ROUTER
@@ -641,12 +650,17 @@ async def admin_callback_router(event):
 @bot.on(events.CallbackQuery(pattern=r'^ai_user_'))
 async def ai_user_callback_handler(event):
     data = event.data.decode('utf-8')
+    await safe_answer(event)
+
     if not admin_handlers.is_admin(event.sender_id):
         is_ok, missing = await admin_handlers.check_user_subscriptions(bot, event.sender_id)
         if not is_ok:
-            await event.answer("⚠️ يجب عليك الاشتراك في القنوات أولاً للمتابعة!", alert=True)
+            await safe_answer(event, "⚠️ يجب عليك الاشتراك في القنوات أولاً للمتابعة!", alert=True)
             text, buttons = admin_handlers.build_fsub_prompt(missing)
-            await bot.send_message(event.chat_id, text, buttons=buttons)
+            try:
+                await bot.send_message(event.chat_id, text, buttons=buttons)
+            except Exception:
+                pass
             return
 
     if data == "ai_user_start":
@@ -661,7 +675,10 @@ async def ai_user_callback_handler(event):
             "✍️ **تفضل بكتابة رسالتك وسأتعرف عليه فوراً:**"
         )
         buttons = [[Button.inline("❌ خروج من وضع الذكاء الاصطناعي", data="ai_user_exit")]]
-        await event.edit(text, buttons=buttons)
+        try:
+            await event.edit(text, buttons=buttons)
+        except Exception:
+            await bot.send_message(event.chat_id, text, buttons=buttons)
 
     elif data == "ai_user_suggest":
         ai_service.set_user_ai_mode(event.sender_id, True)
@@ -674,12 +691,18 @@ async def ai_user_callback_handler(event):
             "✍️ **اكتب طلبك أو التصنيف المفضل وسأرشح لك الأفضل فوراً:**"
         )
         buttons = [[Button.inline("❌ خروج من وضع الذكاء الاصطناعي", data="ai_user_exit")]]
-        await event.edit(text, buttons=buttons)
+        try:
+            await event.edit(text, buttons=buttons)
+        except Exception:
+            await bot.send_message(event.chat_id, text, buttons=buttons)
 
     elif data == "ai_user_exit":
         ai_service.set_user_ai_mode(event.sender_id, False)
-        await event.answer("تم الخروج من وضع الذكاء الاصطناعي.")
-        await event.edit("🔍 اكتب اسم أي فيلم أو مسلسل في الشات للبحث العادي:")
+        await safe_answer(event, "تم الخروج من وضع الذكاء الاصطناعي.")
+        try:
+            await event.edit("🔍 اكتب اسم أي فيلم أو مسلسل في الشات للبحث العادي:")
+        except Exception:
+            await bot.send_message(event.chat_id, "🔍 اكتب اسم أي فيلم أو مسلسل في الشات للبحث العادي:")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 6. SERIES SEASONS & EPISODES BROWSING

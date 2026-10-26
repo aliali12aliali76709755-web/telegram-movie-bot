@@ -218,9 +218,9 @@ def mark_user_unsubscribed(user_id: int):
     threading.Thread(target=_bg_unsub, daemon=True).start()
 
 def is_user_cached_subscribed(user_id: int) -> bool:
-    # Strict short-lived verification: ONLY valid if verified in the last 15 seconds!
-    # If more than 15 seconds passed, caller MUST perform live Telegram check!
-    return (time.time() - _RECENT_VERIFIED.get(user_id, 0)) < 15
+    # Short-lived verification window (35s) for continuous dialogue and rapid clicks.
+    # If more than 35s passed or force_live is requested, live Bot API check is performed!
+    return (time.time() - _RECENT_VERIFIED.get(user_id, 0)) < 35
 
 def reset_all_users_subscription():
     _RECENT_VERIFIED.clear()
