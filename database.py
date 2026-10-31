@@ -553,12 +553,12 @@ _CATALOG_LOCK = threading.Lock()
 
 def refresh_catalog_cache(force: bool = False):
     now = time.time()
-    if not force and (now - _CATALOG_CACHE['last_refresh']) < 45.0 and _CATALOG_CACHE['movies']:
+    if not force and (now - _CATALOG_CACHE['last_refresh']) < 300.0 and _CATALOG_CACHE['movies']:
         return
 
     with _CATALOG_LOCK:
         # Double-check inside lock
-        if not force and (now - _CATALOG_CACHE['last_refresh']) < 45.0 and _CATALOG_CACHE['movies']:
+        if not force and (now - _CATALOG_CACHE['last_refresh']) < 300.0 and _CATALOG_CACHE['movies']:
             return
 
         loaded_series = []

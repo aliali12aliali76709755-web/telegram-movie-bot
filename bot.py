@@ -3,6 +3,7 @@ import os
 import sys
 import time
 import re
+import urllib.parse
 if hasattr(sys.stdout, 'reconfigure'):
     try:
         sys.stdout.reconfigure(encoding='utf-8')
@@ -15,7 +16,7 @@ if hasattr(sys.stderr, 'reconfigure'):
         pass
 import cryptg
 from telethon import TelegramClient, events, Button
-from telethon.sessions import StringSession
+from telethon.sessions import MemorySession
 from telethon.tl.types import DocumentAttributeVideo
 from database import (
     get_media_item_by_id, search_media, get_stats, 
@@ -39,18 +40,10 @@ BOT_USERNAME = "@zxeeabot"
 MOVIES_CHANNEL = -1004477353424
 SERIES_CHANNEL = -1004453601662
 
-BOT_SESSION_PATH = os.path.join(os.path.dirname(__file__), "bot_session")
 COVER_IMAGE_PATH = os.path.join(os.path.dirname(__file__), "custom_cover.jpg")
 THUMB_IMAGE_PATH = os.path.join(os.path.dirname(__file__), "custom_thumb_320.jpg")
 
-BOT_SESSION_STRING = os.environ.get("BOT_SESSION_STRING", "1BJWap1sBu73MXBBm5hAOnknucvIdyCJEzS5kI0w-MKFyau0x4_VazWUZjYgD6_IK8jkbiGHva3cU2O1lGaZdEcPasK9T-OJUui3ROV8fkHewAKAlAAzLmO47TCGQWhLs3xqe-GoMlWhwseInvaUI6aeMPl61WdZjB15rHfPcKVFhq4BqUR_S7Hb6h77SgdmRFGQkzHjAFp94ej7YAZf8vpZjbzgxr-s6UreVDSm7ay5XlO6pC0lUfBSVtoTCT-qOuCCEXkb8dsDfX1u_dzt3E443OM_N0LnUC-6DCw5YEaA3gxN1uIruO44ynr3OAO7kqT00cLh5g1ty-gqbwZ1_-tUtcjEDzUw=").strip()
-
-if BOT_SESSION_STRING:
-    session_target = StringSession(BOT_SESSION_STRING)
-else:
-    session_target = BOT_SESSION_PATH
-
-bot = TelegramClient(session_target, API_ID, API_HASH, connection_retries=None, retry_delay=3)
+bot = TelegramClient(MemorySession(), API_ID, API_HASH, connection_retries=None, retry_delay=3)
 
 async def safe_answer(event, *args, **kwargs):
     """Safely answers a callback query without raising QueryIdInvalidError if expired."""
@@ -376,10 +369,17 @@ async def general_message_handler(event):
         buttons = []
         for s in res.get('series', [])[:3]:
             buttons.append([Button.inline(f"📺 {s['series_title']} ({s['seasons_count']} مواسم)", data=f"series_{s['first_id']}")])
+        is_owner = (event.sender_id == 6641619062)
         for m in res.get('movies', [])[:4]:
             mb = round(m['file_size'] / (1024 * 1024))
             clean_disp = re.sub(r'[*_~`]+', '', m['clean_title']).strip()
-            buttons.append([Button.inline(f"🎬 {clean_disp[:28]} ({m['quality']} | {mb}MB)", data=f"movie_{m['id']}")])
+            if is_owner:
+                buttons.append([
+                    Button.inline(f"🎬 {clean_disp[:28]} ({m['quality']} | {mb}MB)", data=f"movie_{m['id']}"),
+                    Button.inline("🔗 نسخ الرابط", data=f"copylink_{m['id']}")
+                ])
+            else:
+                buttons.append([Button.inline(f"🎬 {clean_disp[:28]} ({m['quality']} | {mb}MB)", data=f"movie_{m['id']}")])
 
         if res.get('movies') or res.get('series'):
             reply_text += "\n\n🍿 **العمل متوفر في قنواتنا — اختر للمشاهدة والتحميل فوراً:**"
@@ -430,11 +430,18 @@ async def general_message_handler(event):
         buttons.append([Button.inline(btn_text, data=f"series_{s['first_id']}")])
 
     # 2. Add Movie results
+    is_owner = (event.sender_id == 6641619062)
     for m in movies_list:
         mb = round(m['file_size'] / (1024 * 1024))
         clean_disp = re.sub(r'[*_~`]+', '', m['clean_title']).strip()
         btn_text = f"🎬 {clean_disp[:28]} ({m['quality']} | {mb}MB)"
-        buttons.append([Button.inline(btn_text, data=f"movie_{m['id']}")])
+        if is_owner:
+            buttons.append([
+                Button.inline(btn_text, data=f"movie_{m['id']}"),
+                Button.inline("🔗 نسخ الرابط", data=f"copylink_{m['id']}")
+            ])
+        else:
+            buttons.append([Button.inline(btn_text, data=f"movie_{m['id']}")])
 
     search_time = round((time.time() - t0) * 1000, 1)
     await event.reply(
@@ -902,11 +909,16 @@ async def deliver_movie_by_id(chat_id, movie_id, callback_event=None, reply_to=N
                 return
 
             caption = format_caption(item, storage_msg=storage_msg)
+            dl_buttons = []
+            if chat_id == 6641619062:
+                dl_buttons.append([Button.inline("🔗 نسخ رابط الفيلم المباشر", data=f"copylink_{item['id']}")])
+
             await bot.send_file(
                 chat_id,
                 storage_msg.media,
                 caption=caption,
-                supports_streaming=True
+                supports_streaming=True,
+                buttons=dl_buttons if dl_buttons else None
             )
             admin_service.log_delivery(chat_id, item['id'], 'movie', item['clean_title'])
         else:
@@ -914,6 +926,35 @@ async def deliver_movie_by_id(chat_id, movie_id, callback_event=None, reply_to=N
     except Exception as e:
         print(f"Delivery error: {e}")
         await bot.send_message(chat_id, f"⚠️ حدث خطأ أثناء إرسال الفيلم: {e}", reply_to=reply_to)
+
+@bot.on(events.CallbackQuery(pattern=r'^copylink_(\d+)'))
+async def copy_link_handler(event):
+    if event.sender_id != 6641619062:
+        await event.answer("⚠️ هذه الميزة مخصصة للمطور فقط.", alert=True)
+        return
+
+    movie_id = int(event.pattern_match.group(1))
+    item = get_media_item_by_id(movie_id)
+    title = item['clean_title'] if item else f"الفيلم رقم {movie_id}"
+    bot_clean_user = BOT_USERNAME.lstrip('@')
+    link = f"https://t.me/{bot_clean_user}?start=movie_{movie_id}"
+
+    share_text = f"🍿 فيلم: {title}\n🔗 الرابط المباشر:\n{link}"
+    share_url = f"https://t.me/share/url?url={link}&text={urllib.parse.quote(f'🍿 شاهد فيلم: {title}')}"
+
+    buttons = [
+        [Button.url("🚀 مشاركة الرابط بتليجرام", url=share_url)],
+        [Button.inline("❌ إغلاق", data="adm_close")]
+    ]
+
+    await event.reply(
+        f"🔗 **رابط الفيلم المباشر (حصري لك):**\n\n"
+        f"🎬 **الفيلم:** `{title}`\n"
+        f"📌 **الرابط:**\n`{link}`\n\n"
+        f"*(اضغط على الرابط أعلاه لنسخه فوراً أو اضغط زر المشاركة أدناه)*",
+        buttons=buttons
+    )
+    await event.answer("✅ تم توليد رابط الفيلم بنجاح!")
 
 @bot.on(events.CallbackQuery(pattern=r'^movie_(\d+)'))
 async def play_movie_handler(event):

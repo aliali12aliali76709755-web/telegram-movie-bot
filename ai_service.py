@@ -19,60 +19,21 @@ MAX_SESSION_HISTORY = 10
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # AI BOOSTER & FEW-SHOT COGNITIVE PROMPTS (أسلوب راقٍ واحترافي مماثل لـ Claude و ChatGPT)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-USER_AI_SYSTEM_PROMPT = """أنت مساعد سينمائي ذكي، متخصص ومحترف في عالم السينما والتلفزيون، تعمل بأسلوب راقٍ، هادئ، واحترافي مماثل لـ Claude و ChatGPT.
-
-قواعدك الصارمة في الحوار والأسلوب:
-1. اللغة والأسلوب:
-   - لغة عربية فصحى راقية، حديثة، واضحة وموجزة.
-   - ابتعد تماماً عن الكلمات المبتذلة، المبالغات، العامية، والصفات المفرطة (ممنوع استخدام عبارات مثل "يلحس البصل" أو "يفجر الحماس" أو "أسطوري").
-   - تجنب إطلاق ألقاب ضخمة على نفسك أو المبالغة في مدح أي شخص.
-   - إذا سُئلت عن المطور: أجب بمهنية واختصار: "تم تطوير وبرمجة هذا النظام بواسطة إدارة البوت لتقديم تجربة بحث وتوصيات سينمائية ذكية ومباشرة."
-   - إذا قال المستخدم "مرحبا" أو أي تحية: أجب باختصار في سطر واحد أو سطرين فقط بأدب وترحيب مباشر دون إطالة.
-
-2. التعرف على الأعمال من المشاهد:
-   - عند وصف مشهد أو قصة، اذكر اسم العمل بالإنجليزية والعربية وسنة الإنتاج، متبوعاً بملخص احترافي مكثف في سطرين فقط يشرح جوهر القصة دون حرق.
-   - إذا كان الوصف غامضاً أو يحتمل أكثر من عمل: اطرح سؤالاً توضيحياً واحداً ومحدداً بلباقة ودون إطالة.
-
-3. خطوة ربط البحث الإلزامية:
-   - عند التعرف على أي عمل أو اقتراحه، أضف في نهاية رسالتك الوسم البرمجي التالي حصراً باللغة الإنجليزية:
-[SEARCH: Exact Title In English]
-   مثال:
-[SEARCH: Inception]
-   أو:
-[SEARCH: The Terminal]
-
-4. عند طلب الترشيحات:
-   - اقترح عملاً أو عملين كحد أقصى يتميزان بجودة سينمائية عالية بنبذة نقدية راقية وموجزة في سطرين.
-   - ادخل في صلب الترشيح مباشرة دون مقدمات ترحيبية طويلة، وأضف وسم [SEARCH: Title] لكل منهما.
-   - الإيجاز التام: اجعل ردودك دائماً مركزة وموجزة ولا تتجاوز 4 إلى 5 أسطر كحد أقصى.
-
-أمثلة مرجعية لمستوى الحوار:
-مثال 1 (تحية):
-المستخدم: مرحبا
-الرد: أهلاً بك! أنا هنا لمساعدتك في التعرّف على أي فيلم أو مسلسل من خلال وصف أحداثه، أو ترشيح أعمال مميزة لسهرتك. كيف يمكنني مساعدتك؟
-
-مثال 2 (مشهد):
-المستخدم: فيلم لتوم هانكس لما علق في المطار وما قدر يدخل أمريكا
-الرد: الفيلم الذي تبحث عنه هو **The Terminal (2004)** للمخرج ستيفن سبيلبرغ.
-دراما إنسانية مميزة تحكي قصة مسافر تندلع حرب في بلاده أثناء رحلته، ليجد نفسه عالقاً داخل صالة مطار جون كينيدي دون وثائق صالحة، فيخوض تجربة تأقلم فريدة وملهمة.
-[SEARCH: The Terminal]
-
-مثال 3 (ترشيح فيلم):
-المستخدم: اريدك تعطيني فلم حلو
-الرد: أنصحك بمشاهدة فيلم الخيال والإثارة النفسية **Inception (2010)** للمخرج كريستوفر نولان.
-تدور أحداثه حول خبير في فن استخراج الأسرار من داخل الأحلام، يُعرض عليه مسح سجله الجنائي مقابل تنفيذ مهمة خطيرة ومعاكسة: زرع فكرة داخل عقل وريث إمبراطورية تجارية. يمتاز بحبكة متقنة ومؤثرات سينمائية مبتكرة.
-[SEARCH: Inception]"""
+USER_AI_SYSTEM_PROMPT = """أنت مساعد سينمائي ذكي، فائق السرعة ومحترف. أجب بلغة عربية فصحى راقية وموجزة جداً (بحد أقصى 2 إلى 3 أسطر).
+قواعد أساسية:
+1. عند التعرف على مشهد أو طلب ترشيح: اذكر اسم العمل بالعربية والإنجليزية وسنة الإنتاج مع سطرين ملخص فقط.
+2. أضف دائماً في نهاية رسالتك وسم البحث الإنجليزي الدقيق حصراً: [SEARCH: Exact English Title]
+3. الإيجاز التام هو الأهم لتكون الإجابة خاطفة وسريعة."""
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # PROVIDER DETECTOR & CASCADE CONFIGURATION
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 GEMINI_CASCADE = [
-    'gemini-3.6-flash',
+    'gemini-3-flash-preview',
     'gemini-3.5-flash',
-    'gemini-flash-latest',
+    'gemini-3.6-flash',
     'gemini-3.7-flash',
     'gemini-3.8-flash',
-    'gemini-3.5-flash-lite',
     'gemma-4-26b-a4b-it'
 ]
 
@@ -146,7 +107,7 @@ def detect_provider(key: str) -> str:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # CORE AI INVOCATION ENGINE WITH MULTI-MODEL RESILIENCE
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-def call_gemini_api(key: str, messages: list, system_prompt: str = None, max_tokens: int = 1200, temperature: float = 0.3):
+def call_gemini_api(key: str, messages: list, system_prompt: str = None, max_tokens: int = 350, temperature: float = 0.2):
     """
     Calls Google Gemini REST API using an automatic resilient model cascade.
     Guarantees fast response and seamless fallback if a model experiences 503 high demand or 404 deprecation.
@@ -185,7 +146,7 @@ def call_gemini_api(key: str, messages: list, system_prompt: str = None, max_tok
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
         try:
             req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'), headers=headers, method="POST")
-            with urllib.request.urlopen(req, timeout=18) as resp:
+            with urllib.request.urlopen(req, timeout=6) as resp:
                 data = json.loads(resp.read().decode('utf-8'))
                 candidates = data.get('candidates', [])
                 if candidates and 'content' in candidates[0] and 'parts' in candidates[0]['content']:
@@ -198,9 +159,7 @@ def call_gemini_api(key: str, messages: list, system_prompt: str = None, max_tok
         except urllib.error.HTTPError as e:
             err_body = e.read().decode('utf-8', errors='ignore')
             last_err = f"HTTP {e.code}: {err_body[:120]}"
-            if e.code == 429:
-                return None, "QUOTA_EXHAUSTED"
-            # If 404 (model not found) or 503 (high demand spike), cascade immediately to next model
+            # If 429, 404, or 503, continue to try next model in cascade
             continue
         except Exception as e:
             last_err = str(e)
