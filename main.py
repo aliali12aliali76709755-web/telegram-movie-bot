@@ -77,7 +77,6 @@ class HealthHandler(BaseHTTPRequestHandler):
                 "bot_started_at": BOT_RUNTIME_STATE["started_at"],
                 "last_heartbeat": BOT_RUNTIME_STATE["last_heartbeat"],
                 "mongodb": db_status,
-                "mongo_error": mongo_err,
                 "stats": stats
             }
             body = json.dumps(resp, ensure_ascii=False, indent=2).encode('utf-8')
@@ -86,7 +85,18 @@ class HealthHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
 
-        elif self.path == "/logs":
+        elif self.path.startswith("/logs"):
+            # Require owner secret key
+            import urllib.parse
+            parsed = urllib.parse.urlparse(self.path)
+            params = urllib.parse.parse_qs(parsed.query)
+            if params.get('key', [''])[0] != '6641619062':
+                self.send_response(403)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(b'{"error": "Access Denied"}')
+                return
+
             body = "\n".join(_LOG_BUFFER).encode('utf-8')
             self.send_response(200)
             self.send_header('Content-type', 'text/plain; charset=utf-8')
