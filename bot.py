@@ -171,28 +171,35 @@ async def start_handler(event):
     param = event.pattern_match.group(1) if event.pattern_match else None
     if param:
         param = param.strip()
-        if param.startswith("movie_"):
-            try:
-                m_id = int(param.replace("movie_", ""))
-                await deliver_movie_by_id(event.chat_id, m_id, reply_to=event.id)
-                return
-            except Exception as e:
-                print(f"Deep link movie error: {e}")
-        elif param.startswith("series_"):
-            try:
-                s_id = int(param.replace("series_", ""))
-                await display_series_by_id(event.chat_id, s_id, reply_to=event.id)
-                return
-            except Exception as e:
-                print(f"Deep link series error: {e}")
-        elif param.startswith("ep_") or param.startswith("episode_"):
-            try:
+        target_id = None
+        hint = None
+
+        try:
+            if param.startswith("movie_"):
+                target_id = int(param.replace("movie_", ""))
+                hint = "movie"
+            elif param.startswith("series_"):
+                target_id = int(param.replace("series_", ""))
+                hint = "series"
+            elif param.startswith("ep_") or param.startswith("episode_"):
                 clean_param = param.replace("episode_", "").replace("ep_", "")
-                ep_id = int(clean_param)
-                await deliver_episode_by_id(event.chat_id, ep_id, reply_to=event.id)
+                target_id = int(clean_param)
+                hint = "ep"
+            elif param.isdigit():
+                target_id = int(param)
+
+            if target_id is not None:
+                item = get_media_item_by_id(target_id)
+                if item and item.get('is_series') == 1:
+                    if hint == "ep" or (item.get('episode_num') and item.get('target_msg_id') and hint != "series"):
+                        await deliver_episode_by_id(event.chat_id, target_id, reply_to=event.id)
+                    else:
+                        await display_series_by_id(event.chat_id, target_id, reply_to=event.id)
+                else:
+                    await deliver_movie_by_id(event.chat_id, target_id, reply_to=event.id)
                 return
-            except Exception as e:
-                print(f"Deep link episode error: {e}")
+        except Exception as e:
+            print(f"Deep link dispatch error for {param}: {e}")
 
     text = (
         "أهلاً بك في بوت الأفلام والمسلسلات 🎬🍿\n\n"
@@ -900,6 +907,10 @@ async def deliver_episode_by_id(chat_id, ep_id, callback_event=None, reply_to=No
             return
 
         storage_msg = await bot.get_messages(SERIES_CHANNEL, ids=target_msg_id)
+        if not (storage_msg and storage_msg.media):
+            # Channel fallback
+            storage_msg = await bot.get_messages(MOVIES_CHANNEL, ids=target_msg_id)
+
         if storage_msg and storage_msg.media:
             if not verify_content_integrity(item, storage_msg):
                 print(f"⚠️ Content Integrity Mismatch for series ep #{item['id']} ({item.get('series_title')}) vs storage msg #{target_msg_id}")
@@ -950,6 +961,14 @@ async def deliver_movie_by_id(chat_id, movie_id, callback_event=None, reply_to=N
             await bot.send_message(chat_id, "⚠️ الفيلم غير متوفر.", reply_to=reply_to)
         return
 
+    # Auto-route if item is actually a series or episode
+    if item.get('is_series') == 1:
+        if item.get('episode_num') and item.get('target_msg_id'):
+            await deliver_episode_by_id(chat_id, movie_id, callback_event=callback_event, reply_to=reply_to)
+        else:
+            await display_series_by_id(chat_id, movie_id, reply_to=reply_to)
+        return
+
     if callback_event:
         await callback_event.answer("⏳ جاري إرسال الفيلم فوراً...")
 
@@ -963,6 +982,10 @@ async def deliver_movie_by_id(chat_id, movie_id, callback_event=None, reply_to=N
             return
 
         storage_msg = await bot.get_messages(MOVIES_CHANNEL, ids=target_msg_id)
+        if not (storage_msg and storage_msg.media):
+            # Fallback to SERIES_CHANNEL
+            storage_msg = await bot.get_messages(SERIES_CHANNEL, ids=target_msg_id)
+
         if storage_msg and storage_msg.media:
             if not verify_content_integrity(item, storage_msg):
                 print(f"⚠️ Content Integrity Mismatch for movie #{item['id']} ({item.get('clean_title')}) vs storage msg #{target_msg_id}")
@@ -976,7 +999,7 @@ async def deliver_movie_by_id(chat_id, movie_id, callback_event=None, reply_to=N
             caption = format_caption(item, storage_msg=storage_msg)
             dl_buttons = []
             if chat_id == 6641619062:
-                dl_buttons.append([Button.inline("🔗 نسخ رابط الفيلم المباشر", data=f"copylink_{item['id']}")])
+                dl_buttons.append([Button.inline("🔗 نسخ رابط الفيلم المباشر", data=f"copylink_movie_{item['id']}")])
 
             await bot.send_file(
                 chat_id,
@@ -998,10 +1021,20 @@ async def copy_link_handler(event):
         await event.answer("⚠️ هذه الميزة مخصصة للمطور فقط.", alert=True)
         return
 
-    link_type = event.pattern_match.group(1) or "movie"
+    explicit_type = event.pattern_match.group(1)
     item_id = int(event.pattern_match.group(2))
     item = get_media_item_by_id(item_id)
     bot_clean_user = BOT_USERNAME.lstrip('@')
+
+    if explicit_type:
+        link_type = explicit_type
+    elif item and item.get('is_series') == 1:
+        link_type = "ep" if item.get('episode_num') else "series"
+    else:
+        link_type = "movie"
+
+    if link_type == "movie" and item and item.get('is_series') == 1:
+        link_type = "series"
 
     if link_type == "series":
         title = item['series_title'] if item else f"المسلسل رقم {item_id}"
