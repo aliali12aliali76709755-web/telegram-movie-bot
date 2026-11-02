@@ -169,13 +169,30 @@ async def start_handler(event):
             return
 
     param = event.pattern_match.group(1) if event.pattern_match else None
-    if param and param.startswith("movie_"):
-        try:
-            m_id = int(param.replace("movie_", ""))
-            await deliver_movie_by_id(event.chat_id, m_id, reply_to=event.id)
-            return
-        except Exception as e:
-            print(f"Deep link error: {e}")
+    if param:
+        param = param.strip()
+        if param.startswith("movie_"):
+            try:
+                m_id = int(param.replace("movie_", ""))
+                await deliver_movie_by_id(event.chat_id, m_id, reply_to=event.id)
+                return
+            except Exception as e:
+                print(f"Deep link movie error: {e}")
+        elif param.startswith("series_"):
+            try:
+                s_id = int(param.replace("series_", ""))
+                await display_series_by_id(event.chat_id, s_id, reply_to=event.id)
+                return
+            except Exception as e:
+                print(f"Deep link series error: {e}")
+        elif param.startswith("ep_") or param.startswith("episode_"):
+            try:
+                clean_param = param.replace("episode_", "").replace("ep_", "")
+                ep_id = int(clean_param)
+                await deliver_episode_by_id(event.chat_id, ep_id, reply_to=event.id)
+                return
+            except Exception as e:
+                print(f"Deep link episode error: {e}")
 
     text = (
         "أهلاً بك في بوت الأفلام والمسلسلات 🎬🍿\n\n"
@@ -367,16 +384,24 @@ async def general_message_handler(event):
 
         reply_text = res.get('response_text', '')
         buttons = []
-        for s in res.get('series', [])[:3]:
-            buttons.append([Button.inline(f"📺 {s['series_title']} ({s['seasons_count']} مواسم)", data=f"series_{s['first_id']}")])
         is_owner = (event.sender_id == 6641619062)
+        for s in res.get('series', [])[:3]:
+            btn_text = f"📺 {s['series_title']} ({s['seasons_count']} مواسم)"
+            if is_owner:
+                buttons.append([
+                    Button.inline(btn_text, data=f"series_{s['first_id']}"),
+                    Button.inline("🔗 نسخ الرابط", data=f"copylink_series_{s['first_id']}")
+                ])
+            else:
+                buttons.append([Button.inline(btn_text, data=f"series_{s['first_id']}")])
+
         for m in res.get('movies', [])[:4]:
             mb = round(m['file_size'] / (1024 * 1024))
             clean_disp = re.sub(r'[*_~`]+', '', m['clean_title']).strip()
             if is_owner:
                 buttons.append([
                     Button.inline(f"🎬 {clean_disp[:28]} ({m['quality']} | {mb}MB)", data=f"movie_{m['id']}"),
-                    Button.inline("🔗 نسخ الرابط", data=f"copylink_{m['id']}")
+                    Button.inline("🔗 نسخ الرابط", data=f"copylink_movie_{m['id']}")
                 ])
             else:
                 buttons.append([Button.inline(f"🎬 {clean_disp[:28]} ({m['quality']} | {mb}MB)", data=f"movie_{m['id']}")])
@@ -424,13 +449,19 @@ async def general_message_handler(event):
         return
 
     buttons = []
+    is_owner = (event.sender_id == 6641619062)
     # 1. Add Series results
     for s in series_list:
         btn_text = f"📺 {s['series_title']} ({s['seasons_count']} مواسم | {s['episodes_count']} حلقة)"
-        buttons.append([Button.inline(btn_text, data=f"series_{s['first_id']}")])
+        if is_owner:
+            buttons.append([
+                Button.inline(btn_text, data=f"series_{s['first_id']}"),
+                Button.inline("🔗 نسخ الرابط", data=f"copylink_series_{s['first_id']}")
+            ])
+        else:
+            buttons.append([Button.inline(btn_text, data=f"series_{s['first_id']}")])
 
     # 2. Add Movie results
-    is_owner = (event.sender_id == 6641619062)
     for m in movies_list:
         mb = round(m['file_size'] / (1024 * 1024))
         clean_disp = re.sub(r'[*_~`]+', '', m['clean_title']).strip()
@@ -438,7 +469,7 @@ async def general_message_handler(event):
         if is_owner:
             buttons.append([
                 Button.inline(btn_text, data=f"movie_{m['id']}"),
-                Button.inline("🔗 نسخ الرابط", data=f"copylink_{m['id']}")
+                Button.inline("🔗 نسخ الرابط", data=f"copylink_movie_{m['id']}")
             ])
         else:
             buttons.append([Button.inline(btn_text, data=f"movie_{m['id']}")])
@@ -493,7 +524,11 @@ async def admin_callback_router(event):
             ai_service.set_admin_ai_mode(event.sender_id, False)
             text = admin_handlers.get_main_menu_text()
             buttons = admin_handlers.get_main_menu_buttons()
-            await event.edit(text, buttons=buttons)
+            try:
+                await event.edit(text, buttons=buttons)
+            except Exception:
+                pass
+            await safe_answer(event, "تم تحديث اللوحة ✅")
 
         elif data == "adm_close":
             await event.delete()
@@ -714,22 +749,10 @@ async def ai_user_callback_handler(event):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 6. SERIES SEASONS & EPISODES BROWSING
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-@bot.on(events.CallbackQuery(pattern=r'^series_(\d+)'))
-async def series_card_handler(event):
-    admin_service.mark_user_interacted(event.sender_id)
-    if not admin_handlers.is_admin(event.sender_id):
-        is_ok, missing = await admin_handlers.check_user_subscriptions(bot, event.sender_id)
-        if not is_ok:
-            await event.answer("⚠️ يجب عليك الاشتراك في القنوات أولاً للمتابعة!", alert=True)
-            text, buttons = admin_handlers.build_fsub_prompt(missing)
-            await bot.send_message(event.chat_id, text, buttons=buttons)
-            return
-
-    item_id = int(event.pattern_match.group(1))
+def build_series_seasons_view(item_id: int, is_owner: bool = False):
     item = get_media_item_by_id(item_id)
     if not item:
-        await event.answer("⚠️ المسلسل غير متوفر.", alert=True)
-        return
+        return None, None
 
     series_title = item['series_title']
     seasons = get_series_seasons(series_title)
@@ -744,7 +767,10 @@ async def series_card_handler(event):
     if row_btns:
         season_buttons.append(row_btns)
 
-    season_buttons.append([Button.inline("رجوع للبحث", data="back_search")])
+    nav_row = [Button.inline("رجوع للبحث", data="back_search")]
+    if is_owner:
+        nav_row.append(Button.inline("🔗 نسخ رابط المسلسل", data=f"copylink_series_{item_id}"))
+    season_buttons.append(nav_row)
 
     text = (
         f"📺 **{series_title}**\n"
@@ -752,7 +778,35 @@ async def series_card_handler(event):
         f"• عدد المواسم المتوفرة: **{len(seasons)}**\n"
         f"• اختر الموسم المطلوب لعرض حلقاته:"
     )
-    await event.edit(text, buttons=season_buttons)
+    return text, season_buttons
+
+async def display_series_by_id(chat_id, item_id, reply_to=None):
+    is_owner = (chat_id == 6641619062)
+    text, buttons = build_series_seasons_view(item_id, is_owner=is_owner)
+    if not text:
+        await bot.send_message(chat_id, "⚠️ المسلسل غير متوفر.", reply_to=reply_to)
+        return
+    await bot.send_message(chat_id, text, buttons=buttons, reply_to=reply_to)
+
+@bot.on(events.CallbackQuery(pattern=r'^series_(\d+)'))
+async def series_card_handler(event):
+    admin_service.mark_user_interacted(event.sender_id)
+    if not admin_handlers.is_admin(event.sender_id):
+        is_ok, missing = await admin_handlers.check_user_subscriptions(bot, event.sender_id)
+        if not is_ok:
+            await event.answer("⚠️ يجب عليك الاشتراك في القنوات أولاً للمتابعة!", alert=True)
+            text, buttons = admin_handlers.build_fsub_prompt(missing)
+            await bot.send_message(event.chat_id, text, buttons=buttons)
+            return
+
+    item_id = int(event.pattern_match.group(1))
+    is_owner = (event.sender_id == 6641619062)
+    text, buttons = build_series_seasons_view(item_id, is_owner=is_owner)
+    if not text:
+        await event.answer("⚠️ المسلسل غير متوفر.", alert=True)
+        return
+
+    await event.edit(text, buttons=buttons)
 
 @bot.on(events.CallbackQuery(pattern=r'^season_(\d+)_(\d+)'))
 async def season_episodes_handler(event):
@@ -803,36 +857,41 @@ async def season_episodes_handler(event):
     )
     await event.edit(text, buttons=episode_buttons)
 
-@bot.on(events.CallbackQuery(pattern=r'^play_ep_(\d+)'))
-async def play_episode_handler(event):
-    admin_service.mark_user_interacted(event.sender_id)
-    if not admin_handlers.is_admin(event.sender_id):
-        is_ok, missing = await admin_handlers.check_user_subscriptions(bot, event.sender_id, force_live=True)
+async def deliver_episode_by_id(chat_id, ep_id, callback_event=None, reply_to=None):
+    admin_service.mark_user_interacted(chat_id)
+    if not admin_handlers.is_admin(chat_id):
+        is_ok, missing = await admin_handlers.check_user_subscriptions(bot, chat_id, force_live=True)
         if not is_ok:
-            await event.answer("⚠️ يجب عليك الاشتراك في القنوات والقروبات المطلوبة أولاً للمتابعة!", alert=True)
+            if callback_event:
+                await callback_event.answer("⚠️ يجب عليك الاشتراك في القنوات والقروبات المطلوبة أولاً للمتابعة!", alert=True)
             text, buttons = admin_handlers.build_fsub_prompt(missing)
-            await bot.send_message(event.chat_id, text, buttons=buttons)
+            await bot.send_message(chat_id, text, buttons=buttons)
             return
-
-    ep_id = int(event.pattern_match.group(1))
 
     item = get_media_item_by_id(ep_id)
     if not item:
-        await event.answer("⚠️ الحلقة غير متوفرة.", alert=True)
+        if callback_event:
+            await callback_event.answer("⚠️ الحلقة غير متوفرة.", alert=True)
+        elif reply_to:
+            await bot.send_message(chat_id, "⚠️ الحلقة غير متوفرة.", reply_to=reply_to)
         return
 
-    await event.answer("⏳ جاري تحضير الحلقة...")
+    if callback_event:
+        await callback_event.answer("⏳ جاري تحضير الحلقة...")
 
-    status_msg = await event.reply("⏳ جاري تجهيز الفيديو وإرساله إليك...")
+    status_msg = await bot.send_message(chat_id, "⏳ جاري تجهيز الحلقة وإرسالها إليك...", reply_to=reply_to)
 
     next_ep = get_next_episode(item['series_title'], item['season_num'], item['episode_num'])
     buttons = []
     if next_ep:
         buttons.append([Button.inline("الحلقة التالية ▶️", data=f"play_ep_{next_ep['id']}")])
-    buttons.append([
+    nav_row = [
         Button.inline("قائمة الحلقات", data=f"season_{item['id']}_{item['season_num']}"),
         Button.inline("قائمة المواسم", data=f"series_{item['id']}")
-    ])
+    ]
+    if chat_id == 6641619062:
+        nav_row.append(Button.inline("🔗 نسخ رابط الحلقة", data=f"copylink_ep_{item['id']}"))
+    buttons.append(nav_row)
 
     try:
         target_msg_id = item.get('target_msg_id')
@@ -849,18 +908,24 @@ async def play_episode_handler(event):
 
             caption = format_caption(item, storage_msg=storage_msg)
             await bot.send_file(
-                event.chat_id,
+                chat_id,
                 storage_msg.media,
                 caption=caption,
                 supports_streaming=True,
                 buttons=buttons
             )
-            admin_service.log_delivery(event.chat_id, item['id'], 'series', item['series_title'])
+            admin_service.log_delivery(chat_id, item['id'], 'series', item['series_title'])
             await status_msg.delete()
         else:
             await status_msg.edit("⚠️ تعذر إرسال الفيديو من القناة الرئيسية.")
     except Exception as e:
+        print(f"Delivery episode error: {e}")
         await status_msg.edit(f"⚠️ حدث خطأ أثناء تجهيز الفيديو: {e}")
+
+@bot.on(events.CallbackQuery(pattern=r'^play_ep_(\d+)'))
+async def play_episode_handler(event):
+    ep_id = int(event.pattern_match.group(1))
+    await deliver_episode_by_id(event.chat_id, ep_id, callback_event=event)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 7. MOVIE DELIVERY
@@ -927,20 +992,43 @@ async def deliver_movie_by_id(chat_id, movie_id, callback_event=None, reply_to=N
         print(f"Delivery error: {e}")
         await bot.send_message(chat_id, f"⚠️ حدث خطأ أثناء إرسال الفيلم: {e}", reply_to=reply_to)
 
-@bot.on(events.CallbackQuery(pattern=r'^copylink_(\d+)'))
+@bot.on(events.CallbackQuery(pattern=r'^copylink_(?:(movie|series|ep)_)?(\d+)'))
 async def copy_link_handler(event):
     if event.sender_id != 6641619062:
         await event.answer("⚠️ هذه الميزة مخصصة للمطور فقط.", alert=True)
         return
 
-    movie_id = int(event.pattern_match.group(1))
-    item = get_media_item_by_id(movie_id)
-    title = item['clean_title'] if item else f"الفيلم رقم {movie_id}"
+    link_type = event.pattern_match.group(1) or "movie"
+    item_id = int(event.pattern_match.group(2))
+    item = get_media_item_by_id(item_id)
     bot_clean_user = BOT_USERNAME.lstrip('@')
-    link = f"https://t.me/{bot_clean_user}?start=movie_{movie_id}"
 
-    share_text = f"🍿 فيلم: {title}\n🔗 الرابط المباشر:\n{link}"
-    share_url = f"https://t.me/share/url?url={link}&text={urllib.parse.quote(f'🍿 شاهد فيلم: {title}')}"
+    if link_type == "series":
+        title = item['series_title'] if item else f"المسلسل رقم {item_id}"
+        link = f"https://t.me/{bot_clean_user}?start=series_{item_id}"
+        header = "📺 رابط المسلسل المباشر (حصري لك):"
+        card_content = f"📺 **المسلسل:** `{title}`"
+        share_title = f"📺 شاهد مسلسل: {title}"
+        alert_msg = "✅ تم توليد رابط المسلسل بنجاح!"
+    elif link_type == "ep":
+        if item:
+            title = f"{item.get('series_title', 'مسلسل')} - الموسم {item.get('season_num', 1)} الحلقة {item.get('episode_num', 1)}"
+        else:
+            title = f"الحلقة رقم {item_id}"
+        link = f"https://t.me/{bot_clean_user}?start=ep_{item_id}"
+        header = "🎬 رابط الحلقة المباشر (حصري لك):"
+        card_content = f"📺 **العمل:** `{title}`"
+        share_title = f"🎬 شاهد {title}"
+        alert_msg = "✅ تم توليد رابط الحلقة بنجاح!"
+    else:
+        title = item['clean_title'] if item else f"الفيلم رقم {item_id}"
+        link = f"https://t.me/{bot_clean_user}?start=movie_{item_id}"
+        header = "🎬 رابط الفيلم المباشر (حصري لك):"
+        card_content = f"🎬 **الفيلم:** `{title}`"
+        share_title = f"🍿 شاهد فيلم: {title}"
+        alert_msg = "✅ تم توليد رابط الفيلم بنجاح!"
+
+    share_url = f"https://t.me/share/url?url={link}&text={urllib.parse.quote(share_title)}"
 
     buttons = [
         [Button.url("🚀 مشاركة الرابط بتليجرام", url=share_url)],
@@ -948,13 +1036,13 @@ async def copy_link_handler(event):
     ]
 
     await event.reply(
-        f"🔗 **رابط الفيلم المباشر (حصري لك):**\n\n"
-        f"🎬 **الفيلم:** `{title}`\n"
+        f"🔗 **{header}**\n\n"
+        f"{card_content}\n"
         f"📌 **الرابط:**\n`{link}`\n\n"
         f"*(اضغط على الرابط أعلاه لنسخه فوراً أو اضغط زر المشاركة أدناه)*",
         buttons=buttons
     )
-    await event.answer("✅ تم توليد رابط الفيلم بنجاح!")
+    await event.answer(alert_msg)
 
 @bot.on(events.CallbackQuery(pattern=r'^movie_(\d+)'))
 async def play_movie_handler(event):
