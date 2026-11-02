@@ -6,14 +6,27 @@ import threading
 import time
 from datetime import datetime
 
-DEFAULT_MONGO_URI = "mongodb+srv://bosshoeheoejossnpe_db_user:eQl1SyEvwIRDMs1w@cluster0.etprryl.mongodb.net/?retryWrites=true&w=majority"
+def _get_mongo_uri() -> str:
+    uri = os.environ.get("MONGO_URI", "").strip()
+    if not uri:
+        for p in ['mongo_uri.txt', os.path.join(os.path.dirname(__file__), 'mongo_uri.txt')]:
+            if os.path.exists(p):
+                try:
+                    with open(p, 'r', encoding='utf-8') as f:
+                        uri = f.read().strip()
+                        if uri:
+                            break
+                except Exception:
+                    pass
+    return uri
+
 DB_PATH = os.path.join(os.path.dirname(__file__), "movies.db")
 
 _mongo_client = None
 
 def get_mongo_db():
     global _mongo_client
-    mongo_uri = os.environ.get("MONGO_URI", "").strip() or DEFAULT_MONGO_URI
+    mongo_uri = _get_mongo_uri()
     if not mongo_uri:
         return None
     if _mongo_client is None:

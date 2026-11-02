@@ -6,6 +6,7 @@
 auth_data_*.json
 auth_hash_*.txt
 token.txt
+mongo_uri.txt
 
 # Python cache
 __pycache__/

@@ -5,7 +5,6 @@ import threading
 import time
 from datetime import datetime, timedelta
 
-DEFAULT_MONGO_URI = "mongodb+srv://bosshoeheoejossnpe_db_user:eQl1SyEvwIRDMs1w@cluster0.etprryl.mongodb.net/?retryWrites=true&w=majority"
 DB_PATH = os.path.join(os.path.dirname(__file__), "movies.db")
 ADMIN_ID = 8625825633
 ADMIN_IDS = {8625825633, 6641619062}
