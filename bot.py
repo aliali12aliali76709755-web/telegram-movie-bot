@@ -60,21 +60,40 @@ SEASON_NAMES = {
     9: "التاسع", 10: "العاشر"
 }
 
+STORE_BOT_USERNAME = os.environ.get("STORE_BOT_USERNAME", "@NitroJet3BOT")
+STORE_CAPTION_LINE = f"🛒 **المتجر الخاص بالبوت: {STORE_BOT_USERNAME}**"
+
 def format_caption(item, storage_msg=None):
     if storage_msg and getattr(storage_msg, 'text', None) and BOT_USERNAME in storage_msg.text:
-        return storage_msg.text
-    if item['is_series']:
-        s_name = SEASON_NAMES.get(item['season_num'], str(item['season_num']))
+        text = storage_msg.text
+        if STORE_BOT_USERNAME not in text:
+            lines = text.split('\n')
+            new_lines = []
+            added = False
+            for line in lines:
+                new_lines.append(line)
+                if BOT_USERNAME.lower() in line.lower() and not added:
+                    new_lines.append(STORE_CAPTION_LINE)
+                    added = True
+            if not added:
+                new_lines.append(STORE_CAPTION_LINE)
+            text = '\n'.join(new_lines)
+        return text
+
+    if item.get('is_series'):
+        s_name = SEASON_NAMES.get(item.get('season_num', 1), str(item.get('season_num', 1)))
         return (
-            f"🎬 **مسلسل: {item['series_title']}**\n"
-            f"🍿 **الموسم {s_name} — الحلقة {item['episode_num']}**\n"
-            f"✨ **عبر: {BOT_USERNAME}**"
+            f"🎬 **مسلسل: {item.get('series_title', '')}**\n"
+            f"🍿 **الموسم {s_name} — الحلقة {item.get('episode_num', 1)}**\n"
+            f"✨ **عبر: {BOT_USERNAME}**\n"
+            f"{STORE_CAPTION_LINE}"
         )
     else:
         return (
-            f"🎬 **فيلم: {item['clean_title']}**\n"
-            f"🌟 **الجودة: {item['quality']}**\n"
-            f"✨ **عبر: {BOT_USERNAME}**"
+            f"🎬 **فيلم: {item.get('clean_title', '')}**\n"
+            f"🌟 **الجودة: {item.get('quality', 'HD')}**\n"
+            f"✨ **عبر: {BOT_USERNAME}**\n"
+            f"{STORE_CAPTION_LINE}"
         )
 
 def verify_content_integrity(item, storage_msg) -> bool:

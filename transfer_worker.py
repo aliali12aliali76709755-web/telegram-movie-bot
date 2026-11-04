@@ -23,19 +23,24 @@ SEASON_NAMES = {
     9: "التاسع", 10: "العاشر"
 }
 
+STORE_BOT_USERNAME = os.environ.get("STORE_BOT_USERNAME", "@NitroJet3BOT")
+STORE_CAPTION_LINE = f"🛒 **المتجر الخاص بالبوت: {STORE_BOT_USERNAME}**"
+
 def format_caption(item):
     if item['is_series']:
         s_name = SEASON_NAMES.get(item['season_num'], str(item['season_num']))
         return (
             f"🎬 **مسلسل: {item['series_title']}**\n"
             f"🍿 **الموسم {s_name} — الحلقة {item['episode_num']}**\n"
-            f"✨ **عبر: {BOT_USERNAME}**"
+            f"✨ **عبر: {BOT_USERNAME}**\n"
+            f"{STORE_CAPTION_LINE}"
         )
     else:
         return (
             f"🎬 **فيلم: {item['clean_title']}**\n"
             f"🌟 **الجودة: {item['quality']}**\n"
-            f"✨ **عبر: {BOT_USERNAME}**"
+            f"✨ **عبر: {BOT_USERNAME}**\n"
+            f"{STORE_CAPTION_LINE}"
         )
 
 async def transfer_single_item(client, item):
