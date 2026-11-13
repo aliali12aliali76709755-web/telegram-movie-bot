@@ -43,6 +43,73 @@ SERIES_CHANNEL = -1004453601662
 COVER_IMAGE_PATH = os.path.join(os.path.dirname(__file__), "custom_cover.jpg")
 THUMB_IMAGE_PATH = os.path.join(os.path.dirname(__file__), "custom_thumb_320.jpg")
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# TELETHON CLOUD RESILIENCE & MTPROTO AUTO-TIME SYNC PATCH
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Fixes MTProto clock drift and container sleep/wake desync:
+# Prevents "Server sent a very new message with ID ... SecurityError: Too many messages had to be ignored consecutively"
+try:
+    import struct
+    from telethon.network import mtprotostate
+
+    def _resilient_decrypt_message_data(self, body):
+        now = time.time()
+        if len(body) < 8:
+            raise mtprotostate.InvalidBufferError(body)
+
+        key_id = struct.unpack('<Q', body[:8])[0]
+        if key_id != self.auth_key.key_id:
+            raise mtprotostate.SecurityError('Server replied with an invalid auth key')
+
+        msg_key = body[8:24]
+        aes_key, aes_iv = self._calc_key(self.auth_key.key, msg_key, False)
+        body = mtprotostate.AES.decrypt_ige(body[24:], aes_key, aes_iv)
+
+        our_key = mtprotostate.sha256(self.auth_key.key[96:96 + 32] + body)
+        if msg_key != our_key.digest()[8:24]:
+            raise mtprotostate.SecurityError("Received msg_key doesn't match with expected one")
+
+        reader = mtprotostate.BinaryReader(body)
+        reader.read_long()
+        if reader.read_long() != self.id:
+            raise mtprotostate.SecurityError('Server replied with a wrong session ID (see FAQ for details)')
+
+        remote_msg_id = reader.read_long()
+        if remote_msg_id % 2 != 1:
+            raise mtprotostate.SecurityError('Server sent an even msg_id')
+
+        if remote_msg_id <= self._highest_remote_id and remote_msg_id in self._recent_remote_ids:
+            self._log.warning('Server resent the older message %d, ignoring', remote_msg_id)
+            self._count_ignored()
+            return None
+
+        remote_sequence = reader.read_int()
+        reader.read_int()
+        obj = reader.tgread_object()
+
+        if obj.CONSTRUCTOR_ID in (mtprotostate.BadServerSalt.CONSTRUCTOR_ID, mtprotostate.BadMsgNotification.CONSTRUCTOR_ID):
+            self.update_time_offset(remote_msg_id)
+        else:
+            remote_msg_time = remote_msg_id >> 32
+            time_delta = (now + self.time_offset) - remote_msg_time
+
+            # If time drifted beyond tolerance (e.g. cloud VM paused or NTP drifted),
+            # auto-synchronize MTProto time offset immediately instead of bricking!
+            if time_delta > mtprotostate.MSG_TOO_OLD_DELTA or -time_delta > mtprotostate.MSG_TOO_NEW_DELTA:
+                self.update_time_offset(remote_msg_id)
+                self._ignore_count = 0
+
+        self._recent_remote_ids.append(remote_msg_id)
+        self._highest_remote_id = remote_msg_id
+        self._ignore_count = 0
+
+        return mtprotostate.TLMessage(remote_msg_id, remote_sequence, obj)
+
+    mtprotostate.MTProtoState.decrypt_message_data = _resilient_decrypt_message_data
+    print("🛡️ Telethon resilience & MTProto auto-resync patch installed successfully!", flush=True)
+except Exception as _patch_err:
+    print(f"⚠️ Telethon patch notice: {_patch_err}", flush=True)
+
 bot = TelegramClient(MemorySession(), API_ID, API_HASH, connection_retries=None, retry_delay=3)
 
 async def safe_answer(event, *args, **kwargs):
@@ -1167,6 +1234,28 @@ async def main(state_dict: dict = None):
             # Run setup in background thread to avoid freezing the event loop
             import threading
             threading.Thread(target=_bg_setup, daemon=True).start()
+
+            # Active Telegram connection health monitor
+            async def _bot_health_checker():
+                consecutive_fails = 0
+                while True:
+                    await asyncio.sleep(60)
+                    try:
+                        if not bot.is_connected():
+                            consecutive_fails += 1
+                        else:
+                            await asyncio.wait_for(bot.get_me(), timeout=10)
+                            consecutive_fails = 0
+                    except Exception as he:
+                        consecutive_fails += 1
+                        print(f"⚠️ Bot health check notice ({consecutive_fails}/3): {he}", flush=True)
+
+                    if consecutive_fails >= 3:
+                        print("🚨 Bot health check failed 3 times consecutively. Triggering auto-recovery exit...", flush=True)
+                        import os
+                        os._exit(1)
+
+            asyncio.create_task(_bot_health_checker())
 
             await bot.run_until_disconnected()
         except Exception as e:
