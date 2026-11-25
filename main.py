@@ -3,6 +3,7 @@ import os
 import sys
 import json
 import time
+import queue
 from collections import deque
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
@@ -177,61 +178,82 @@ class HealthHandler(BaseHTTPRequestHandler):
 
         # Parse HTTP Range header (streaming chunks)
         range_header = self.headers.get('Range')
-        STREAM_CHUNK_SIZE = 1024 * 1024  # 1MB per chunk
+        WINDOW_SIZE = 2 * 1024 * 1024  # 2MB window per request
 
         if range_header:
             import re
             m = re.match(r'bytes=(\d+)-(\d*)', range_header.strip())
             if m:
                 start = int(m.group(1))
-                end = int(m.group(2)) if m.group(2) else min(start + STREAM_CHUNK_SIZE - 1, file_size - 1)
-                end = min(end, file_size - 1)
-                content_length = end - start + 1
+                requested_end = int(m.group(2)) if m.group(2) else None
+                if requested_end is not None:
+                    end = min(requested_end, file_size - 1)
+                else:
+                    end = min(start + WINDOW_SIZE - 1, file_size - 1)
+            else:
+                start = 0
+                end = min(WINDOW_SIZE - 1, file_size - 1)
+        else:
+            start = 0
+            end = min(WINDOW_SIZE - 1, file_size - 1)
 
-                self.send_response(206)  # Partial Content
-                self.send_header('Content-Type', mime_type)
-                self.send_header('Content-Range', f'bytes {start}-{end}/{file_size}')
-                self.send_header('Content-Length', str(content_length))
-                self.send_header('Accept-Ranges', 'bytes')
-                self.send_header('Cache-Control', 'public, max-age=3600')
-                self.send_cors_headers()
-                self.end_headers()
+        end = max(start, min(end, file_size - 1))
+        content_length = end - start + 1
 
-                async def stream_range():
-                    chunks = []
-                    async for c in telethon_bot.iter_download(doc, offset=start, limit=content_length, request_size=262144):
-                        chunks.append(c)
-                    return b''.join(chunks)
-
-                try:
-                    fut = asyncio.run_coroutine_threadsafe(stream_range(), BOT_ASYNC_LOOP)
-                    data = fut.result(timeout=25)
-                    self.wfile.write(data)
-                except Exception:
-                    pass
-                return
-
-        # No Range: send video metadata & initial chunk
-        self.send_response(200)
-        self.send_header('Content-Type', mime_type)
-        self.send_header('Content-Length', str(file_size))
+        self.send_response(206)  # 206 Partial Content for video streams
+        self.send_header('Content-Type', mime_type or 'video/mp4')
+        self.send_header('Content-Range', f'bytes {start}-{end}/{file_size}')
+        self.send_header('Content-Length', str(content_length))
         self.send_header('Accept-Ranges', 'bytes')
-        self.send_header('Cache-Control', 'public, max-age=3600')
+        self.send_header('Cache-Control', 'no-cache')
         self.send_cors_headers()
         self.end_headers()
 
-        async def stream_initial():
-            chunks = []
-            async for c in telethon_bot.iter_download(doc, offset=0, limit=STREAM_CHUNK_SIZE, request_size=262144):
-                chunks.append(c)
-            return b''.join(chunks)
+        CHUNK_SIZE = 131072  # 128 KB per Telegram MTProto part
+        num_chunks = max(1, (content_length + CHUNK_SIZE - 1) // CHUNK_SIZE)
+
+        chunk_q = queue.Queue(maxsize=16)
+
+        async def fetch_chunks():
+            try:
+                bytes_yielded = 0
+                async for chunk in telethon_bot.iter_download(
+                    doc,
+                    offset=start,
+                    limit=num_chunks,
+                    chunk_size=CHUNK_SIZE,
+                    request_size=CHUNK_SIZE
+                ):
+                    if not chunk:
+                        continue
+                    needed = content_length - bytes_yielded
+                    if needed <= 0:
+                        break
+                    to_send = chunk[:needed]
+                    chunk_q.put(to_send)
+                    bytes_yielded += len(to_send)
+                    if bytes_yielded >= content_length:
+                        break
+            except Exception as err:
+                print(f"Telethon iter_download streaming error: {err}", flush=True)
+                chunk_q.put(err)
+            finally:
+                chunk_q.put(None)
+
+        asyncio.run_coroutine_threadsafe(fetch_chunks(), BOT_ASYNC_LOOP)
 
         try:
-            fut = asyncio.run_coroutine_threadsafe(stream_initial(), BOT_ASYNC_LOOP)
-            data = fut.result(timeout=25)
-            self.wfile.write(data)
+            while True:
+                item = chunk_q.get(timeout=25)
+                if item is None:
+                    break
+                if isinstance(item, Exception):
+                    break
+                self.wfile.write(item)
+                self.wfile.flush()
         except Exception:
             pass
+        return
 
     def do_GET(self):
         import urllib.parse
