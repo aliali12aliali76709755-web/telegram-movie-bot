@@ -39,6 +39,8 @@ if not BOT_TOKEN:
 BOT_USERNAME = "@zxeeabot"
 MOVIES_CHANNEL = -1004477353424
 SERIES_CHANNEL = -1004453601662
+MOVIES_PEER = types.InputPeerChannel(channel_id=4477353424, access_hash=-8914780067918483052)
+SERIES_PEER = types.InputPeerChannel(channel_id=4453601662, access_hash=-9118092575347429633)
 
 COVER_IMAGE_PATH = os.path.join(os.path.dirname(__file__), "custom_cover.jpg")
 THUMB_IMAGE_PATH = os.path.join(os.path.dirname(__file__), "custom_thumb_320.jpg")
@@ -982,10 +984,10 @@ async def deliver_episode_by_id(chat_id, ep_id, callback_event=None, reply_to=No
             await status_msg.edit("⚠️ الحلقة قيد التجهيز والنقل، يرجى المحاولة بعد قليل.")
             return
 
-        storage_msg = await bot.get_messages(SERIES_CHANNEL, ids=target_msg_id)
+        storage_msg = await bot.get_messages(SERIES_PEER, ids=target_msg_id)
         if not (storage_msg and storage_msg.media):
             # Channel fallback
-            storage_msg = await bot.get_messages(MOVIES_CHANNEL, ids=target_msg_id)
+            storage_msg = await bot.get_messages(MOVIES_PEER, ids=target_msg_id)
 
         if storage_msg and storage_msg.media:
             if not verify_content_integrity(item, storage_msg):
@@ -1057,10 +1059,10 @@ async def deliver_movie_by_id(chat_id, movie_id, callback_event=None, reply_to=N
                 await bot.send_message(chat_id, "⚠️ الفيلم قيد التجهيز والنقل، يرجى المحاولة بعد قليل.", reply_to=reply_to)
             return
 
-        storage_msg = await bot.get_messages(MOVIES_CHANNEL, ids=target_msg_id)
+        storage_msg = await bot.get_messages(MOVIES_PEER, ids=target_msg_id)
         if not (storage_msg and storage_msg.media):
-            # Fallback to SERIES_CHANNEL
-            storage_msg = await bot.get_messages(SERIES_CHANNEL, ids=target_msg_id)
+            # Fallback to SERIES_PEER
+            storage_msg = await bot.get_messages(SERIES_PEER, ids=target_msg_id)
 
         if storage_msg and storage_msg.media:
             if not verify_content_integrity(item, storage_msg):
@@ -1223,13 +1225,6 @@ async def main(state_dict: dict = None):
             await bot.start(bot_token=BOT_TOKEN)
             me = await bot.get_me()
             print(f"Bot @{me.username} ({me.first_name}) is LIVE and LISTENING for messages!", flush=True)
-
-            # Warm up dialogs and channel entities into memory cache
-            try:
-                dialogs = await bot.get_dialogs(limit=100)
-                print(f"✅ Loaded {len(dialogs)} dialogs and channel entities into Telethon cache.", flush=True)
-            except Exception as de:
-                print(f"Notice loading dialogs: {de}", flush=True)
 
             if state_dict is not None:
                 state_dict["connected"] = True

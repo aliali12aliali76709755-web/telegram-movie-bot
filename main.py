@@ -77,7 +77,7 @@ class HealthHandler(BaseHTTPRequestHandler):
                 parts = path.strip("/").split("/")
                 item_id = int(parts[-1])
                 import database
-                from bot import bot as telethon_bot, MOVIES_CHANNEL, SERIES_CHANNEL
+                from bot import bot as telethon_bot, MOVIES_PEER, SERIES_PEER
                 item = database.get_movie_by_id(item_id)
                 if not item or not item.get('target_msg_id'):
                     mdb = database.get_mongo_db()
@@ -90,23 +90,20 @@ class HealthHandler(BaseHTTPRequestHandler):
                             item['is_series'] = doc.get('is_series', 0)
                 if item and item.get('target_msg_id') and BOT_ASYNC_LOOP and telethon_bot:
                     target_msg_id = item['target_msg_id']
-                    channel = MOVIES_CHANNEL if item.get('is_series') == 0 else SERIES_CHANNEL
+                    ch_peer = MOVIES_PEER if item.get('is_series') == 0 else SERIES_PEER
+                    alt_peer = SERIES_PEER if ch_peer == MOVIES_PEER else MOVIES_PEER
                     async def fetch_meta():
+                        msg = None
                         try:
-                            msg = await telethon_bot.get_messages(channel, ids=target_msg_id)
+                            msg = await telethon_bot.get_messages(ch_peer, ids=target_msg_id)
                         except Exception:
-                            try:
-                                await telethon_bot.get_dialogs(limit=100)
-                                msg = await telethon_bot.get_messages(channel, ids=target_msg_id)
-                            except Exception:
-                                msg = None
+                            pass
 
                         if not (msg and msg.media and hasattr(msg.media, 'document') and msg.media.document):
-                            alt = SERIES_CHANNEL if channel == MOVIES_CHANNEL else MOVIES_CHANNEL
                             try:
-                                msg = await telethon_bot.get_messages(alt, ids=target_msg_id)
+                                msg = await telethon_bot.get_messages(alt_peer, ids=target_msg_id)
                             except Exception:
-                                msg = None
+                                pass
 
                         if msg and msg.media and hasattr(msg.media, 'document') and msg.media.document:
                             return msg.media.document.size, msg.media.document.mime_type or "video/mp4"
@@ -129,7 +126,7 @@ class HealthHandler(BaseHTTPRequestHandler):
 
     def handle_video_stream(self, item_id: int):
         import database
-        from bot import bot as telethon_bot, MOVIES_CHANNEL, SERIES_CHANNEL
+        from bot import bot as telethon_bot, MOVIES_PEER, SERIES_PEER
 
         item = database.get_movie_by_id(item_id)
         if not item or not item.get('target_msg_id'):
@@ -151,7 +148,8 @@ class HealthHandler(BaseHTTPRequestHandler):
             return
 
         target_msg_id = item['target_msg_id']
-        channel = MOVIES_CHANNEL if item.get('is_series') == 0 else SERIES_CHANNEL
+        ch_peer = MOVIES_PEER if item.get('is_series') == 0 else SERIES_PEER
+        alt_peer = SERIES_PEER if ch_peer == MOVIES_PEER else MOVIES_PEER
 
         if BOT_ASYNC_LOOP is None or not telethon_bot:
             self.send_response(503)
@@ -162,21 +160,17 @@ class HealthHandler(BaseHTTPRequestHandler):
 
         # Fetch Telegram Document Metadata
         async def fetch_document():
+            msg = None
             try:
-                msg = await telethon_bot.get_messages(channel, ids=target_msg_id)
-            except Exception:
-                try:
-                    await telethon_bot.get_dialogs(limit=100)
-                    msg = await telethon_bot.get_messages(channel, ids=target_msg_id)
-                except Exception:
-                    msg = None
+                msg = await telethon_bot.get_messages(ch_peer, ids=target_msg_id)
+            except Exception as e:
+                print(f"Primary peer fetch error: {e}", flush=True)
 
             if not (msg and msg.media and hasattr(msg.media, 'document') and msg.media.document):
-                alt_channel = SERIES_CHANNEL if channel == MOVIES_CHANNEL else MOVIES_CHANNEL
                 try:
-                    msg = await telethon_bot.get_messages(alt_channel, ids=target_msg_id)
-                except Exception:
-                    msg = None
+                    msg = await telethon_bot.get_messages(alt_peer, ids=target_msg_id)
+                except Exception as e:
+                    print(f"Alt peer fetch error: {e}", flush=True)
 
             if msg and msg.media and hasattr(msg.media, 'document') and msg.media.document:
                 doc = msg.media.document
