@@ -15,7 +15,7 @@ if hasattr(sys.stderr, 'reconfigure'):
     except Exception:
         pass
 import cryptg
-from telethon import TelegramClient, events, Button
+from telethon import TelegramClient, events, Button, types, errors
 from telethon.sessions import MemorySession
 from telethon.tl.types import DocumentAttributeVideo
 from database import (
@@ -1259,12 +1259,19 @@ async def main(state_dict: dict = None):
             asyncio.create_task(_bot_health_checker())
 
             await bot.run_until_disconnected()
+        except errors.FloodWaitError as fwe:
+            wait_s = fwe.seconds + 2
+            print(f"⚠️ Telegram FloodWait of {wait_s}s required. Sleeping patiently...", flush=True)
+            if state_dict is not None:
+                state_dict["connected"] = False
+                state_dict["last_error"] = f"FloodWait {wait_s}s"
+            await asyncio.sleep(wait_s)
         except Exception as e:
-            print(f"Bot disconnected ({e}). Reconnecting in 3s...", flush=True)
+            print(f"Bot disconnected ({e}). Reconnecting in 5s...", flush=True)
             if state_dict is not None:
                 state_dict["connected"] = False
                 state_dict["last_error"] = str(e)
-            await asyncio.sleep(3)
+            await asyncio.sleep(5)
 
 if __name__ == "__main__":
     asyncio.run(main())
