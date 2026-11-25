@@ -42,6 +42,9 @@ class LogCapture:
 sys.stdout = LogCapture(sys.stdout)
 sys.stderr = LogCapture(sys.stderr)
 
+# Global event loop reference for cross-thread Telethon async streaming
+BOT_ASYNC_LOOP = None
+
 BOT_RUNTIME_STATE = {
     "connected": False,
     "username": "@zxeeabot",
@@ -55,13 +58,161 @@ BOT_RUNTIME_STATE = {
 class HealthHandler(BaseHTTPRequestHandler):
     def send_cors_headers(self):
         self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+        self.send_header('Access-Control-Allow-Methods', 'GET, HEAD, POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Range')
+        self.send_header('Access-Control-Expose-Headers', 'Content-Range, Content-Length, Accept-Ranges')
 
     def do_OPTIONS(self):
         self.send_response(204)
         self.send_cors_headers()
         self.end_headers()
+
+    def do_HEAD(self):
+        import urllib.parse
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+        if path.startswith("/api/stream/") or path.startswith("/stream/"):
+            try:
+                parts = path.strip("/").split("/")
+                item_id = int(parts[-1])
+                import database
+                from bot import bot as telethon_bot, MOVIES_CHANNEL, SERIES_CHANNEL
+                item = database.get_movie_by_id(item_id)
+                if item and item.get('target_msg_id') and BOT_ASYNC_LOOP and telethon_bot:
+                    target_msg_id = item['target_msg_id']
+                    channel = MOVIES_CHANNEL if item.get('is_series') == 0 else SERIES_CHANNEL
+                    async def fetch_meta():
+                        msg = await telethon_bot.get_messages(channel, ids=target_msg_id)
+                        if not (msg and msg.media and hasattr(msg.media, 'document') and msg.media.document):
+                            alt = SERIES_CHANNEL if channel == MOVIES_CHANNEL else MOVIES_CHANNEL
+                            msg = await telethon_bot.get_messages(alt, ids=target_msg_id)
+                        if msg and msg.media and hasattr(msg.media, 'document') and msg.media.document:
+                            return msg.media.document.size, msg.media.document.mime_type or "video/mp4"
+                        return 0, "video/mp4"
+                    fut = asyncio.run_coroutine_threadsafe(fetch_meta(), BOT_ASYNC_LOOP)
+                    f_size, m_type = fut.result(timeout=10)
+                    if f_size > 0:
+                        self.send_response(200)
+                        self.send_header('Content-Type', m_type)
+                        self.send_header('Content-Length', str(f_size))
+                        self.send_header('Accept-Ranges', 'bytes')
+                        self.send_cors_headers()
+                        self.end_headers()
+                        return
+            except Exception:
+                pass
+        self.send_response(200)
+        self.send_cors_headers()
+        self.end_headers()
+
+    def handle_video_stream(self, item_id: int):
+        import database
+        from bot import bot as telethon_bot, MOVIES_CHANNEL, SERIES_CHANNEL
+
+        item = database.get_movie_by_id(item_id)
+        if not item or not item.get('target_msg_id'):
+            self.send_response(404)
+            self.send_header('Content-Type', 'application/json')
+            self.send_cors_headers()
+            self.end_headers()
+            self.wfile.write(b'{"error": "Video not found or not yet transferred"}')
+            return
+
+        target_msg_id = item['target_msg_id']
+        channel = MOVIES_CHANNEL if item.get('is_series') == 0 else SERIES_CHANNEL
+
+        if BOT_ASYNC_LOOP is None or not telethon_bot:
+            self.send_response(503)
+            self.send_cors_headers()
+            self.end_headers()
+            self.wfile.write(b'{"error": "Bot streaming service initializing"}')
+            return
+
+        # Fetch Telegram Document Metadata
+        async def fetch_document():
+            msg = await telethon_bot.get_messages(channel, ids=target_msg_id)
+            if not (msg and msg.media and hasattr(msg.media, 'document') and msg.media.document):
+                alt_channel = SERIES_CHANNEL if channel == MOVIES_CHANNEL else MOVIES_CHANNEL
+                msg = await telethon_bot.get_messages(alt_channel, ids=target_msg_id)
+            if msg and msg.media and hasattr(msg.media, 'document') and msg.media.document:
+                doc = msg.media.document
+                return doc, doc.size, doc.mime_type or "video/mp4"
+            return None, 0, "video/mp4"
+
+        try:
+            fut = asyncio.run_coroutine_threadsafe(fetch_document(), BOT_ASYNC_LOOP)
+            doc, file_size, mime_type = fut.result(timeout=15)
+        except Exception as e:
+            self.send_response(500)
+            self.send_cors_headers()
+            self.end_headers()
+            self.wfile.write(f'{{"error": "Telegram fetch error: {str(e)}"}}'.encode('utf-8'))
+            return
+
+        if not doc or file_size <= 0:
+            self.send_response(404)
+            self.send_cors_headers()
+            self.end_headers()
+            self.wfile.write(b'{"error": "Storage document missing"}')
+            return
+
+        # Parse HTTP Range header (streaming chunks)
+        range_header = self.headers.get('Range')
+        STREAM_CHUNK_SIZE = 1024 * 1024  # 1MB per chunk
+
+        if range_header:
+            import re
+            m = re.match(r'bytes=(\d+)-(\d*)', range_header.strip())
+            if m:
+                start = int(m.group(1))
+                end = int(m.group(2)) if m.group(2) else min(start + STREAM_CHUNK_SIZE - 1, file_size - 1)
+                end = min(end, file_size - 1)
+                content_length = end - start + 1
+
+                self.send_response(206)  # Partial Content
+                self.send_header('Content-Type', mime_type)
+                self.send_header('Content-Range', f'bytes {start}-{end}/{file_size}')
+                self.send_header('Content-Length', str(content_length))
+                self.send_header('Accept-Ranges', 'bytes')
+                self.send_header('Cache-Control', 'public, max-age=3600')
+                self.send_cors_headers()
+                self.end_headers()
+
+                async def stream_range():
+                    chunks = []
+                    async for c in telethon_bot.iter_download(doc, offset=start, limit=content_length, request_size=262144):
+                        chunks.append(c)
+                    return b''.join(chunks)
+
+                try:
+                    fut = asyncio.run_coroutine_threadsafe(stream_range(), BOT_ASYNC_LOOP)
+                    data = fut.result(timeout=25)
+                    self.wfile.write(data)
+                except Exception:
+                    pass
+                return
+
+        # No Range: send video metadata & initial chunk
+        self.send_response(200)
+        self.send_header('Content-Type', mime_type)
+        self.send_header('Content-Length', str(file_size))
+        self.send_header('Accept-Ranges', 'bytes')
+        self.send_header('Cache-Control', 'public, max-age=3600')
+        self.send_cors_headers()
+        self.end_headers()
+
+        async def stream_initial():
+            chunks = []
+            async for c in telethon_bot.iter_download(doc, offset=0, limit=STREAM_CHUNK_SIZE, request_size=262144):
+                chunks.append(c)
+            return b''.join(chunks)
+
+        try:
+            fut = asyncio.run_coroutine_threadsafe(stream_initial(), BOT_ASYNC_LOOP)
+            data = fut.result(timeout=25)
+            self.wfile.write(data)
+        except Exception:
+            pass
 
     def do_GET(self):
         import urllib.parse
@@ -90,21 +241,83 @@ class HealthHandler(BaseHTTPRequestHandler):
                 self.wfile.write(b"Mini App template not found.")
                 return
 
-        # 2. Mini App API: List Movies (Paginated, Searchable, Filterable)
+        # 1.5. Live Video Stream for In-App Player (HTML5 Range requests)
+        elif path.startswith("/api/stream/") or path.startswith("/stream/"):
+            try:
+                parts = path.strip("/").split("/")
+                item_id = int(parts[-1])
+            except Exception:
+                self.send_response(400)
+                self.send_header('Content-Type', 'application/json')
+                self.send_cors_headers()
+                self.end_headers()
+                self.wfile.write(b'{"error": "Invalid video item ID"}')
+                return
+
+            self.handle_video_stream(item_id)
+            return
+
+        # 2. Mini App API: List Movies & Series (Paginated, Searchable, Filterable)
         elif path == "/api/movies":
             page = int(params.get('page', ['1'])[0])
             limit = min(50, max(1, int(params.get('limit', ['24'])[0])))
             query = params.get('query', [None])[0] or params.get('q', [None])[0]
             genre = params.get('genre', [None])[0]
             sort = params.get('sort', ['featured'])[0]
+            content_type = params.get('type', [None])[0] or params.get('content_type', ['all'])[0]
 
             try:
                 import database
-                res = database.get_miniapp_movies(page=page, limit=limit, query=query, genre=genre, sort=sort)
+                res = database.get_miniapp_movies(page=page, limit=limit, query=query, genre=genre, sort=sort, content_type=content_type)
                 body = json.dumps({"status": "success", **res}, ensure_ascii=False).encode('utf-8')
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json; charset=utf-8')
                 self.send_header('Cache-Control', 'public, max-age=60')
+                self.send_cors_headers()
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as e:
+                self.send_response(500)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.send_cors_headers()
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode('utf-8'))
+            return
+
+        # 2.5. Mini App API: Series Catalog & Episodes
+        elif path == "/api/series":
+            page = int(params.get('page', ['1'])[0])
+            limit = min(50, max(1, int(params.get('limit', ['24'])[0])))
+            query = params.get('query', [None])[0] or params.get('q', [None])[0]
+            try:
+                import database
+                res = database.get_miniapp_series(page=page, limit=limit, query=query)
+                body = json.dumps({"status": "success", **res}, ensure_ascii=False).encode('utf-8')
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.send_header('Cache-Control', 'public, max-age=60')
+                self.send_cors_headers()
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as e:
+                self.send_response(500)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.send_cors_headers()
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode('utf-8'))
+            return
+
+        elif path.startswith("/api/series/") and path.endswith("/episodes"):
+            try:
+                parts = path.strip("/").split("/")
+                import urllib.parse
+                series_key = urllib.parse.unquote(parts[2])
+                import database
+                eps = database.get_series_episodes(series_key)
+                body = json.dumps({"status": "success", "episodes": eps, "total": len(eps)}, ensure_ascii=False).encode('utf-8')
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.send_header('Cache-Control', 'public, max-age=120')
                 self.send_cors_headers()
                 self.end_headers()
                 self.wfile.write(body)
@@ -291,6 +504,9 @@ def keep_alive_watchdog():
         time.sleep(50)
 
 async def main():
+    global BOT_ASYNC_LOOP
+    BOT_ASYNC_LOOP = asyncio.get_running_loop()
+
     # 0. Initialize Database Schema and Indexes (both MongoDB and SQLite)
     try:
         import database

@@ -162,9 +162,29 @@
   </header>
 
   <!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+  <!-- 1.5. MEDIA TYPE SWITCHER (ALL / MOVIES / SERIES) -->
+  <!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+  <section class="mx-auto max-w-6xl px-4 pt-3">
+    <div class="grid grid-cols-3 gap-1.5 rounded-2xl border border-white/10 bg-zinc-900/90 p-1 shadow-inner backdrop-blur-md">
+      <button onclick="setContentType('all')" id="btn-type-all" class="type-btn flex items-center justify-center gap-1.5 rounded-xl bg-gradient-to-r from-rose-600 to-indigo-600 py-2.5 text-xs font-bold text-white shadow-glow-red transition active:scale-95">
+        <i data-lucide="sparkles" class="h-3.5 w-3.5"></i>
+        <span>🌟 كل المحتوى</span>
+      </button>
+      <button onclick="setContentType('movies')" id="btn-type-movies" class="type-btn flex items-center justify-center gap-1.5 rounded-xl py-2.5 text-xs font-medium text-zinc-400 transition hover:text-white active:scale-95">
+        <i data-lucide="film" class="h-3.5 w-3.5"></i>
+        <span>🎬 الأفلام</span>
+      </button>
+      <button onclick="setContentType('series')" id="btn-type-series" class="type-btn flex items-center justify-center gap-1.5 rounded-xl py-2.5 text-xs font-medium text-zinc-400 transition hover:text-white active:scale-95">
+        <i data-lucide="tv" class="h-3.5 w-3.5"></i>
+        <span>📺 المسلسلات</span>
+      </button>
+    </div>
+  </section>
+
+  <!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
   <!-- 2. SEARCH & LIVE FILTERS -->
   <!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
-  <section class="mx-auto max-w-6xl px-4 pt-4">
+  <section class="mx-auto max-w-6xl px-4 pt-3">
     <!-- Search Bar Input -->
     <div class="relative">
       <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3.5 text-zinc-400">
@@ -318,12 +338,23 @@
     <div class="relative max-h-[90vh] sm:max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-t-3xl sm:rounded-3xl border border-white/10 bg-brand-surface text-zinc-100 shadow-2xl transition-all">
       
       <!-- Close Button -->
-      <button onclick="closeMovieModal()" class="absolute top-4 left-4 z-30 flex h-9 w-9 items-center justify-center rounded-full bg-black/60 text-white backdrop-blur-md transition hover:bg-rose-600">
+      <button onclick="closeMovieModal()" class="absolute top-4 left-4 z-40 flex h-9 w-9 items-center justify-center rounded-full bg-black/70 text-white backdrop-blur-md transition hover:bg-rose-600">
         <i data-lucide="x" class="h-5 w-5"></i>
       </button>
 
+      <!-- Embedded In-App Video Player (Visible when playing) -->
+      <div id="modalPlayerWrapper" class="hidden relative w-full aspect-video bg-black z-30 overflow-hidden border-b border-rose-500/30">
+        <video id="modalVideoPlayer" class="w-full h-full object-contain" controls playsinline preload="none">
+          <source id="modalVideoSource" src="" type="video/mp4">
+          متصفحك لا يدعم مشغل الفيديو المباشر.
+        </video>
+        <button onclick="stopInAppPlayer()" title="إغلاق المشغل" class="absolute top-3 left-3 z-40 flex h-8 w-8 items-center justify-center rounded-full bg-black/80 text-white hover:bg-rose-600 transition">
+          <i data-lucide="x" class="h-4 w-4"></i>
+        </button>
+      </div>
+
       <!-- Backdrop Header Image -->
-      <div class="relative h-56 sm:h-72 w-full overflow-hidden bg-zinc-950">
+      <div id="modalBackdropHeader" class="relative h-56 sm:h-72 w-full overflow-hidden bg-zinc-950">
         <img id="modalBackdrop" src="" alt="Backdrop" class="h-full w-full object-cover object-center opacity-85">
         <div class="absolute inset-0 bg-gradient-to-t from-brand-surface via-brand-surface/60 to-transparent"></div>
         
@@ -364,7 +395,7 @@
           <span class="text-zinc-600">•</span>
           <div class="flex items-center gap-1.5">
             <i data-lucide="shield-check" class="h-3.5 w-3.5 text-emerald-400"></i>
-            <span>متحقق في القناة</span>
+            <span>متحقق وجاهز للبث</span>
           </div>
         </div>
 
@@ -375,28 +406,51 @@
 
         <!-- Story Synopsis Description -->
         <div class="mt-4">
-          <h4 class="text-xs font-bold text-zinc-400 uppercase tracking-wider">قصة الفيلم</h4>
+          <h4 class="text-xs font-bold text-zinc-400 uppercase tracking-wider">القصة والوصف</h4>
           <p id="modalDescription" class="mt-1.5 text-sm font-normal text-zinc-300 leading-relaxed">
             وصف وقصة الفيلم الكاملة...
           </p>
         </div>
 
         <!-- Primary Action Buttons -->
-        <div class="mt-6 flex flex-col sm:flex-row items-center gap-2.5">
-          <!-- Watch/Deliver in Bot Button -->
-          <button id="modalDeliverBtn" onclick="deliverMovieFromModal()" class="w-full sm:flex-1 flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-rose-600 via-rose-500 to-indigo-600 py-3.5 px-6 font-readex text-sm font-bold text-white shadow-glow-red transition active:scale-95 hover:brightness-110">
-            <i data-lucide="play" class="h-4 w-4 fill-white"></i>
-            <span>مشاهدة وتحميل في البوت</span>
+        <div class="mt-6 flex flex-col gap-2.5">
+          <!-- Play Directly in App Button -->
+          <button id="modalPlayInAppBtn" onclick="playMovieInApp()" class="w-full flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-rose-600 via-rose-500 to-indigo-600 py-3.5 px-6 font-readex text-sm font-bold text-white shadow-glow-red transition active:scale-95 hover:brightness-110">
+            <i data-lucide="play" class="h-5 w-5 fill-white"></i>
+            <span id="modalPlayBtnText">▶️ مشاهدة الفيديو داخل التطبيق الآن</span>
           </button>
 
+          <!-- Alternative Options -->
+          <div class="flex items-center gap-2">
+            <button id="modalDeliverBtn" onclick="deliverMovieFromModal()" class="flex-1 flex items-center justify-center gap-1.5 rounded-2xl border border-white/10 bg-zinc-900 py-3 px-3 text-xs font-semibold text-zinc-300 transition hover:bg-zinc-800">
+              <i data-lucide="send" class="h-4 w-4 text-emerald-400"></i>
+              <span>📥 إرسال للبوت (تحميل)</span>
+            </button>
+            <button id="modalExternalBtn" onclick="openExternalPlayer()" class="flex-1 flex items-center justify-center gap-1.5 rounded-2xl border border-white/10 bg-zinc-900 py-3 px-3 text-xs font-semibold text-zinc-300 transition hover:bg-zinc-800">
+              <i data-lucide="external-link" class="h-4 w-4 text-sky-400"></i>
+              <span>مشغل خارجي / VLC</span>
+            </button>
+          </div>
+
+          <!-- Series Episodes Accordion (for series) -->
+          <div id="modalSeriesEpisodesContainer" class="hidden mt-4 border-t border-white/10 pt-4">
+            <div class="flex items-center justify-between pb-2">
+              <h4 class="text-xs font-bold text-zinc-200">حلقات المسلسل (<span id="episodesCountBadge">0</span>)</h4>
+              <span class="text-[11px] text-rose-400 font-medium">اضغط لتشغيل أي حلقة 🍿</span>
+            </div>
+            <div id="modalEpisodesList" class="max-h-60 overflow-y-auto mt-2 space-y-2 pr-1">
+              <!-- Rendered via JS -->
+            </div>
+          </div>
+
           <!-- Favorite & Share Buttons -->
-          <div class="flex w-full sm:w-auto items-center gap-2">
-            <button id="modalFavBtn" onclick="toggleFavoriteFromModal()" class="flex-1 sm:flex-none flex items-center justify-center gap-1.5 rounded-2xl border border-white/10 bg-zinc-900 py-3.5 px-4 text-xs font-semibold text-zinc-300 transition hover:bg-zinc-800">
+          <div class="flex items-center gap-2 pt-1">
+            <button id="modalFavBtn" onclick="toggleFavoriteFromModal()" class="flex-1 flex items-center justify-center gap-1.5 rounded-2xl border border-white/10 bg-zinc-900 py-3 px-4 text-xs font-semibold text-zinc-300 transition hover:bg-zinc-800">
               <i data-lucide="heart" class="h-4 w-4 text-rose-500"></i>
               <span id="modalFavBtnText">المفضلة</span>
             </button>
 
-            <button onclick="shareMovieFromModal()" class="flex-1 sm:flex-none flex items-center justify-center gap-1.5 rounded-2xl border border-white/10 bg-zinc-900 py-3.5 px-4 text-xs font-semibold text-zinc-300 transition hover:bg-zinc-800">
+            <button onclick="shareMovieFromModal()" class="flex-1 flex items-center justify-center gap-1.5 rounded-2xl border border-white/10 bg-zinc-900 py-3 px-4 text-xs font-semibold text-zinc-300 transition hover:bg-zinc-800">
               <i data-lucide="share-2" class="h-4 w-4 text-indigo-400"></i>
               <span>مشاركة</span>
             </button>
@@ -458,6 +512,7 @@
       searchQuery: '',
       activeGenre: 'الكل',
       sortMode: 'featured',
+      contentType: 'all',
       activeTab: 'home',
       currentModalMovie: null,
       favorites: JSON.parse(localStorage.getItem('cinema_favorites') || '[]')
@@ -603,6 +658,28 @@
       }
     }
 
+    // Content Type Filter (All / Movies / Series)
+    function setContentType(type) {
+      hapticTap();
+      state.contentType = type;
+      ['all', 'movies', 'series'].forEach(t => {
+        const btn = document.getElementById(`btn-type-${t}`);
+        if (!btn) return;
+        if (t === type) {
+          btn.className = "type-btn flex items-center justify-center gap-1.5 rounded-xl bg-gradient-to-r from-rose-600 to-indigo-600 py-2.5 text-xs font-bold text-white shadow-glow-red transition active:scale-95";
+        } else {
+          btn.className = "type-btn flex items-center justify-center gap-1.5 rounded-xl py-2.5 text-xs font-medium text-zinc-400 transition hover:text-white active:scale-95";
+        }
+      });
+      const titleEl = document.getElementById('gridSectionTitle');
+      if (titleEl) {
+        if (type === 'movies') titleEl.textContent = 'أحدث وأقوى الأفلام السينمائية';
+        else if (type === 'series') titleEl.textContent = 'مكتبة المسلسلات العالمية';
+        else titleEl.textContent = 'أحدث وأقوى الأفلام والمسلسلات';
+      }
+      loadMovies(true);
+    }
+
     // 2. Load Paginated Movies Grid
     async function loadMovies(reset = false) {
       if (state.isLoading) return;
@@ -621,7 +698,8 @@
         const queryParams = new URLSearchParams({
           page: state.page,
           limit: state.limit,
-          sort: state.sortMode
+          sort: state.sortMode,
+          type: state.contentType
         });
         if (state.searchQuery) queryParams.set('query', state.searchQuery);
         if (state.activeGenre && state.activeGenre !== 'الكل') queryParams.set('genre', state.activeGenre);
@@ -688,7 +766,7 @@
           <img src="${posterSrc}" alt="${displayTitle}" loading="lazy" class="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105" onerror="this.onerror=null;this.parentElement.innerHTML='<div class=\\'flex h-full w-full items-center justify-center bg-zinc-900 p-2 text-center text-xs font-bold text-zinc-500\\'>🎬 ${displayTitle}</div>'">
         ` : `
           <div class="flex h-full w-full flex-col items-center justify-center bg-gradient-to-br from-zinc-800 to-zinc-950 p-3 text-center">
-            <i data-lucide="film" class="h-8 w-8 text-rose-500/60 mb-2"></i>
+            <i data-lucide="${m.is_series ? 'tv' : 'film'}" class="h-8 w-8 text-rose-500/60 mb-2"></i>
             <span class="text-xs font-bold text-zinc-300 line-clamp-3">${displayTitle}</span>
           </div>
         `;
@@ -704,7 +782,7 @@
 
               <!-- Top Badges -->
               <div class="absolute top-2 right-2 left-2 flex items-center justify-between">
-                <span class="rounded-md bg-black/70 backdrop-blur-md px-1.5 py-0.5 font-readex text-[10px] font-bold text-white uppercase">${quality}</span>
+                <span class="rounded-md bg-black/70 backdrop-blur-md px-1.5 py-0.5 font-readex text-[10px] font-bold text-white uppercase">${m.is_series ? '📺 مسلسل' : quality}</span>
                 ${rating ? `
                   <span class="flex items-center gap-0.5 rounded-md bg-amber-500/30 backdrop-blur-md px-1.5 py-0.5 font-readex text-[10px] font-extrabold text-amber-300">
                     <i data-lucide="star" class="h-2.5 w-2.5 fill-amber-400 text-amber-400"></i>
@@ -723,8 +801,8 @@
               <!-- Bottom Meta in Poster -->
               <div class="absolute bottom-2 right-2 left-2">
                 <div class="flex items-center gap-1.5 text-[10px] text-zinc-400 font-medium">
-                  ${year ? `<span>${year}</span>` : ''}
-                  ${m.duration_str ? `<span>• ${m.duration_str}</span>` : ''}
+                  ${m.is_series ? `<span>${m.seasons_count || 1} مواسم • ${m.episodes_count || 1} حلقة</span>` : (year ? `<span>${year}</span>` : '')}
+                  ${!m.is_series && m.duration_str ? `<span>• ${m.duration_str}</span>` : ''}
                 </div>
                 <h3 class="mt-0.5 font-readex text-xs font-bold text-white line-clamp-1 group-hover:text-rose-400 transition-colors">${displayTitle}</h3>
               </div>
@@ -826,6 +904,9 @@
       const modal = document.getElementById('movieModal');
       if (!modal) return;
 
+      // Reset any active player
+      stopInAppPlayer();
+
       // Find in existing loaded or fetch
       let movie = state.movies.find(m => m.id === movieId) || state.featured.find(m => m.id === movieId);
       if (!movie) {
@@ -849,11 +930,11 @@
       document.getElementById('modalTitle').textContent = movie.title;
       document.getElementById('modalArabicTitle').textContent = movie.arabic_title ? `(${movie.arabic_title})` : '';
       document.getElementById('modalQualityBadge').textContent = movie.quality || '1080p';
-      document.getElementById('modalYearBadge').textContent = movie.release_year || 'HD';
-      document.getElementById('modalRatingVal').textContent = movie.rating || '8.0';
-      document.getElementById('modalDuration').textContent = movie.duration_str || '1h 45m';
+      document.getElementById('modalYearBadge').textContent = movie.is_series ? 'مسلسل' : (movie.release_year || 'HD');
+      document.getElementById('modalRatingVal').textContent = movie.rating || '8.5';
+      document.getElementById('modalDuration').textContent = movie.is_series ? `${movie.episodes_count || 1} حلقة` : (movie.duration_str || '1h 45m');
       document.getElementById('modalSize').textContent = movie.size_str || '1.2 GB';
-      document.getElementById('modalDescription').textContent = movie.description || 'فيلم سينمائي مميز، متوفر للمشاهدة والتحميل المباشر بجودة عالية.';
+      document.getElementById('modalDescription').textContent = movie.description || 'عمل سينمائي مميز، متوفر للمشاهدة المباشرة داخل التطبيق والتحميل بجودة عالية.';
 
       // Genres chips
       const genresContainer = document.getElementById('modalGenresList');
@@ -862,6 +943,18 @@
         genresContainer.innerHTML = genres.map(g => `
           <span class="rounded-lg border border-white/5 bg-zinc-900/90 px-2.5 py-1 text-[11px] font-semibold text-zinc-300">${g.trim()}</span>
         `).join('');
+      }
+
+      // Check if series or movie
+      const episodesBox = document.getElementById('modalSeriesEpisodesContainer');
+      const playBtnText = document.getElementById('modalPlayBtnText');
+      if (movie.is_series == 1) {
+        if (playBtnText) playBtnText.textContent = '▶️ استعراض وتشغيل الحلقات مباشرة';
+        if (episodesBox) episodesBox.classList.remove('hidden');
+        loadSeriesEpisodes(movie.series_title || movie.title);
+      } else {
+        if (playBtnText) playBtnText.textContent = '▶️ مشاهدة الفيديو داخل التطبيق الآن';
+        if (episodesBox) episodesBox.classList.add('hidden');
       }
 
       // Favorite Button State
@@ -874,12 +967,96 @@
 
     function closeMovieModal() {
       hapticTap();
+      stopInAppPlayer();
       const modal = document.getElementById('movieModal');
       if (modal) {
         modal.classList.add('hidden');
         modal.classList.remove('flex');
       }
       state.currentModalMovie = null;
+    }
+
+    // 8. In-App Video Player Engine
+    function playMovieInApp(customStreamUrl) {
+      hapticTap('heavy');
+      const m = state.currentModalMovie;
+      if (!m && !customStreamUrl) return;
+
+      const url = customStreamUrl || `/api/stream/${m.id}`;
+      const wrapper = document.getElementById('modalPlayerWrapper');
+      const video = document.getElementById('modalVideoPlayer');
+      const source = document.getElementById('modalVideoSource');
+
+      if (wrapper && video && source) {
+        source.src = url;
+        wrapper.classList.remove('hidden');
+        video.load();
+        const playPromise = video.play();
+        if (playPromise !== undefined) {
+          playPromise.catch(e => {
+            console.warn("Autoplay notice:", e);
+          });
+        }
+        wrapper.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    }
+
+    function stopInAppPlayer() {
+      const wrapper = document.getElementById('modalPlayerWrapper');
+      const video = document.getElementById('modalVideoPlayer');
+      if (video) {
+        video.pause();
+        video.removeAttribute('src');
+        video.load();
+      }
+      if (wrapper) wrapper.classList.add('hidden');
+    }
+
+    function openExternalPlayer() {
+      if (!state.currentModalMovie) return;
+      const url = `/api/stream/${state.currentModalMovie.id}`;
+      window.open(url, '_blank');
+    }
+
+    // 9. Load Series Episodes List
+    async function loadSeriesEpisodes(seriesTitle) {
+      const container = document.getElementById('modalSeriesEpisodesContainer');
+      const list = document.getElementById('modalEpisodesList');
+      const countBadge = document.getElementById('episodesCountBadge');
+      if (!container || !list) return;
+
+      container.classList.remove('hidden');
+      list.innerHTML = '<div class="text-xs text-zinc-400 py-3 text-center">⏳ جاري جلب قائمة الحلقات...</div>';
+
+      try {
+        const res = await fetch(`/api/series/${encodeURIComponent(seriesTitle)}/episodes`);
+        const data = await res.json();
+        if (data.status === 'success' && data.episodes.length > 0) {
+          if (countBadge) countBadge.textContent = data.episodes.length;
+          list.innerHTML = data.episodes.map(ep => `
+            <div class="flex items-center justify-between rounded-xl border border-white/5 bg-zinc-900/90 p-2.5 transition hover:border-rose-500/30">
+              <div class="flex items-center gap-2">
+                <span class="rounded bg-rose-600/30 px-2 py-0.5 text-[10px] font-bold text-rose-300">م ${ep.season_num} ح ${ep.episode_num}</span>
+                <span class="text-xs font-semibold text-white line-clamp-1">${ep.title}</span>
+              </div>
+              <div class="flex items-center gap-1.5">
+                <button onclick="playMovieInApp('${ep.stream_url}')" class="flex items-center gap-1 rounded-lg bg-rose-600 px-2.5 py-1 text-[11px] font-bold text-white transition hover:brightness-110 active:scale-95">
+                  <i data-lucide="play" class="h-3 w-3 fill-white"></i>
+                  <span>مشاهدة</span>
+                </button>
+                <button onclick="deliverMovieById(${ep.id})" title="إرسال للمحادثة في البوت" class="flex items-center justify-center rounded-lg bg-zinc-800 p-1.5 text-zinc-300 hover:text-emerald-400 active:scale-95">
+                  <i data-lucide="send" class="h-3 w-3"></i>
+                </button>
+              </div>
+            </div>
+          `).join('');
+          lucide.createIcons();
+        } else {
+          list.innerHTML = '<div class="text-xs text-zinc-500 py-2 text-center">جاري استكمال نقل وتجهيز الحلقات...</div>';
+        }
+      } catch (e) {
+        list.innerHTML = '<div class="text-xs text-rose-400 py-2 text-center">تعذر تحميل الحلقات.</div>';
+      }
     }
 
     // Action: Direct Bot Delivery

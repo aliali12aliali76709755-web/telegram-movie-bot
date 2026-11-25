@@ -956,25 +956,33 @@ def format_movie_for_api(row: dict) -> dict:
     }
 
 def get_miniapp_movies(page: int = 1, limit: int = 24, query: str = None, 
-                       genre: str = None, sort: str = 'featured', is_series: int = 0) -> dict:
+                       genre: str = None, sort: str = 'featured', 
+                       content_type: str = 'all', is_series: int = None) -> dict:
     """
     High-performance paginated API for the Telegram Mini App.
     Seamlessly works with MongoDB Atlas (primary on Render) and SQLite (local).
+    Supports content_type: 'all', 'movies', 'series'.
     """
+    if content_type == 'series' or is_series == 1:
+        return get_miniapp_series(page=page, limit=limit, query=query)
+
     offset = max(0, (page - 1) * limit)
     mdb = get_mongo_db()
 
     if mdb is not None:
         try:
             col = mdb['media_items']
-            mongo_filter = {'is_series': is_series}
-            
+            mongo_filter = {}
+            if content_type == 'movies' or is_series == 0:
+                mongo_filter['is_series'] = 0
+
             if query and query.strip():
                 escaped_q = re.escape(query.strip())
                 mongo_filter['$or'] = [
                     {'clean_title': {'$regex': escaped_q, '$options': 'i'}},
                     {'arabic_title': {'$regex': escaped_q, '$options': 'i'}},
-                    {'title': {'$regex': escaped_q, '$options': 'i'}}
+                    {'title': {'$regex': escaped_q, '$options': 'i'}},
+                    {'series_title': {'$regex': escaped_q, '$options': 'i'}}
                 ]
             
             if genre and genre.strip() and genre.strip() != 'الكل':
@@ -989,8 +997,8 @@ def get_miniapp_movies(page: int = 1, limit: int = 24, query: str = None,
                 sort_spec = [('release_year', -1), ('id', -1)]
             elif sort == 'newest':
                 sort_spec = [('id', -1)]
-            else:  # 'featured'
-                sort_spec = [('poster_url', -1), ('rating', -1), ('id', -1)]
+            else:  # 'featured' - balances quality, transfer status and variety
+                sort_spec = [('is_transferred', -1), ('rating', -1), ('id', -1)]
 
             docs = list(col.find(mongo_filter).sort(sort_spec).skip(offset).limit(limit))
             items = [format_movie_for_api(d) for d in docs]
@@ -1008,8 +1016,12 @@ def get_miniapp_movies(page: int = 1, limit: int = 24, query: str = None,
             print(f"MongoDB get_miniapp_movies error, falling back to SQLite: {e}")
 
     # Fallback to SQLite
-    conditions = ["is_series = ?"]
-    params = [is_series]
+    conditions = []
+    params = []
+    if content_type == 'movies' or is_series == 0:
+        conditions.append("is_series = 0")
+    elif content_type == 'series' or is_series == 1:
+        conditions.append("is_series = 1")
 
     if query and query.strip():
         q = f"%{query.strip()}%"
@@ -1020,7 +1032,7 @@ def get_miniapp_movies(page: int = 1, limit: int = 24, query: str = None,
         conditions.append("genres LIKE ?")
         params.append(f"%{genre.strip()}%")
 
-    where_clause = " WHERE " + " AND ".join(conditions)
+    where_clause = (" WHERE " + " AND ".join(conditions)) if conditions else ""
 
     if sort == 'rating':
         order_clause = "ORDER BY (CASE WHEN rating IS NOT NULL AND rating > 0 THEN rating ELSE 0 END) DESC, id DESC"
@@ -1029,7 +1041,7 @@ def get_miniapp_movies(page: int = 1, limit: int = 24, query: str = None,
     elif sort == 'newest':
         order_clause = "ORDER BY id DESC"
     else:  # 'featured'
-        order_clause = "ORDER BY (CASE WHEN poster_url IS NOT NULL AND poster_url != '' THEN 1 ELSE 0 END) DESC, (CASE WHEN rating IS NOT NULL AND rating > 0 THEN rating ELSE 0 END) DESC, id DESC"
+        order_clause = "ORDER BY is_transferred DESC, (CASE WHEN rating IS NOT NULL AND rating > 0 THEN rating ELSE 0 END) DESC, id DESC"
 
     try:
         conn = get_connection()
@@ -1071,6 +1083,153 @@ def get_miniapp_movies(page: int = 1, limit: int = 24, query: str = None,
             "has_more": False,
             "error": str(e)
         }
+
+def get_miniapp_series(page: int = 1, limit: int = 24, query: str = None) -> dict:
+    """
+    Returns high-speed paginated list of series with season/episode counts.
+    """
+    refresh_catalog_cache()
+    series_list = _CATALOG_CACHE.get('series', [])
+
+    if query and query.strip():
+        q_norm = normalize_arabic(clean_text(query.strip()))
+        filtered = [s for s in series_list if q_norm in s.get('norm', '') or query.strip().lower() in (s.get('series_title') or '').lower()]
+    else:
+        filtered = series_list
+
+    total = len(filtered)
+    offset = max(0, (page - 1) * limit)
+    page_items = filtered[offset:offset + limit]
+
+    items = []
+    mdb = get_mongo_db()
+    for s in page_items:
+        st = s.get('series_title')
+        first_id = s.get('first_id', 0)
+        poster = ""
+        backdrop = ""
+        rating = 8.6
+        desc = f"مسلسل {st} متوفر بجميع مواسمه وحلقاته كاملة للمشاهدة والتحميل بجودة عالية."
+        genres = ["دراما", "إثارة"]
+
+        if mdb is not None:
+            try:
+                first_doc = mdb['media_items'].find_one({'series_title': st, 'poster_url': {'$nin': [None, '']}})
+                if not first_doc:
+                    first_doc = mdb['media_items'].find_one({'series_title': st})
+                if first_doc:
+                    first_id = first_doc.get('id', first_id)
+                    poster = first_doc.get('poster_url') or ""
+                    backdrop = first_doc.get('backdrop_url') or ""
+                    rating = round(float(first_doc['rating']), 1) if first_doc.get('rating') else 8.6
+                    desc = first_doc.get('description') or desc
+                    if first_doc.get('genres'):
+                        g_raw = first_doc.get('genres')
+                        genres = [g.strip() for g in g_raw.split(',') if g.strip()] if isinstance(g_raw, str) else g_raw
+            except Exception:
+                pass
+
+        items.append({
+            "id": first_id,
+            "title": st,
+            "clean_title": st,
+            "arabic_title": st,
+            "series_title": st,
+            "poster_url": poster,
+            "backdrop_url": backdrop,
+            "description": desc,
+            "rating": rating,
+            "release_year": 2023,
+            "genres": genres,
+            "is_series": 1,
+            "seasons_count": s.get('seasons_count', 1),
+            "episodes_count": s.get('episodes_count', 1),
+            "quality": "1080p",
+            "file_size": 0,
+            "size_str": "HD",
+            "duration": 0,
+            "duration_str": f"{s.get('episodes_count', 1)} حلقة",
+            "is_transferred": 1
+        })
+
+    total_pages = max(1, (total + limit - 1) // limit) if total > 0 else 1
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "total_pages": total_pages,
+        "has_more": page < total_pages
+    }
+
+def get_series_episodes(series_title_or_id):
+    """
+    Returns all episodes of a series grouped by season, with stream links.
+    """
+    mdb = get_mongo_db()
+    st = None
+    if isinstance(series_title_or_id, int) or (isinstance(series_title_or_id, str) and series_title_or_id.isdigit()):
+        item = get_movie_by_id(int(series_title_or_id))
+        if item:
+            st = item.get('series_title') or item.get('title')
+    else:
+        st = series_title_or_id
+
+    if not st:
+        return []
+
+    episodes = []
+    if mdb is not None:
+        try:
+            col = mdb['media_items']
+            docs = list(col.find(
+                {'is_series': 1, 'series_title': st},
+                {'id': 1, 'series_title': 1, 'season_num': 1, 'episode_num': 1, 'clean_title': 1, 
+                 'quality': 1, 'file_size': 1, 'duration': 1, 'target_msg_id': 1}
+            ).sort([('season_num', 1), ('episode_num', 1)]))
+            for d in docs:
+                episodes.append({
+                    "id": d.get('id'),
+                    "series_title": d.get('series_title'),
+                    "season_num": d.get('season_num', 1),
+                    "episode_num": d.get('episode_num', 1),
+                    "title": d.get('clean_title') or f"الموسم {d.get('season_num', 1)} - الحلقة {d.get('episode_num', 1)}",
+                    "quality": d.get('quality') or "1080p",
+                    "file_size": d.get('file_size', 0),
+                    "duration": d.get('duration', 0),
+                    "stream_url": f"/api/stream/{d.get('id')}"
+                })
+            return episodes
+        except Exception as e:
+            print(f"MongoDB get_series_episodes error: {e}")
+
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+        SELECT id, series_title, season_num, episode_num, clean_title, quality, file_size, duration, target_msg_id
+        FROM media_items
+        WHERE is_series = 1 AND series_title = ?
+        ORDER BY season_num ASC, episode_num ASC
+        """, (st,))
+        rows = [dict(r) for r in cursor.fetchall()]
+        conn.close()
+        for r in rows:
+            episodes.append({
+                "id": r.get('id'),
+                "series_title": r.get('series_title'),
+                "season_num": r.get('season_num', 1),
+                "episode_num": r.get('episode_num', 1),
+                "title": r.get('clean_title') or f"الموسم {r.get('season_num', 1)} - الحلقة {r.get('episode_num', 1)}",
+                "quality": r.get('quality') or "1080p",
+                "file_size": r.get('file_size', 0),
+                "duration": r.get('duration', 0),
+                "stream_url": f"/api/stream/{r.get('id')}"
+            })
+    except Exception:
+        pass
+
+    return episodes
 
 def get_movie_by_id(item_id: int):
     mdb = get_mongo_db()
