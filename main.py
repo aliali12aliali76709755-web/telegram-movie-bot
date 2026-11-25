@@ -527,8 +527,9 @@ def start_http_server():
 
 def keep_alive_watchdog():
     """
-    Continuous watchdog thread that runs every 50 seconds:
-    - Pings public Render URL to keep the container awake 24/7.
+    Continuous watchdog thread that runs every 8 minutes:
+    - Pings public Render URL to keep the container awake 24/7 (Render sleeps after 15m).
+    - Uses standard browser User-Agent to avoid Cloudflare rate limiting.
     - Updates heartbeat.
     """
     import urllib.request
@@ -538,8 +539,8 @@ def keep_alive_watchdog():
     port = int(os.environ.get("PORT", 10000))
     local_url = f"http://127.0.0.1:{port}/status"
 
-    print("🔄 Keep-Alive Watchdog started. Monitoring every 50s...")
-    time.sleep(10)
+    print("🔄 Keep-Alive Watchdog started. Monitoring every 8 minutes...")
+    time.sleep(30)
 
     while True:
         now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -549,7 +550,7 @@ def keep_alive_watchdog():
         try:
             req = urllib.request.Request(
                 public_url,
-                headers={"User-Agent": "Render-KeepAlive-Engine/2.0"}
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"}
             )
             with urllib.request.urlopen(req, timeout=10) as resp:
                 pass
@@ -560,7 +561,7 @@ def keep_alive_watchdog():
             except Exception:
                 pass
 
-        time.sleep(50)
+        time.sleep(480)  # Ping every 8 minutes (Render sleeps at 15m)
 
 async def main():
     global BOT_ASYNC_LOOP
