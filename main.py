@@ -92,10 +92,22 @@ class HealthHandler(BaseHTTPRequestHandler):
                     target_msg_id = item['target_msg_id']
                     channel = MOVIES_CHANNEL if item.get('is_series') == 0 else SERIES_CHANNEL
                     async def fetch_meta():
-                        msg = await telethon_bot.get_messages(channel, ids=target_msg_id)
+                        try:
+                            msg = await telethon_bot.get_messages(channel, ids=target_msg_id)
+                        except Exception:
+                            try:
+                                await telethon_bot.get_dialogs(limit=100)
+                                msg = await telethon_bot.get_messages(channel, ids=target_msg_id)
+                            except Exception:
+                                msg = None
+
                         if not (msg and msg.media and hasattr(msg.media, 'document') and msg.media.document):
                             alt = SERIES_CHANNEL if channel == MOVIES_CHANNEL else MOVIES_CHANNEL
-                            msg = await telethon_bot.get_messages(alt, ids=target_msg_id)
+                            try:
+                                msg = await telethon_bot.get_messages(alt, ids=target_msg_id)
+                            except Exception:
+                                msg = None
+
                         if msg and msg.media and hasattr(msg.media, 'document') and msg.media.document:
                             return msg.media.document.size, msg.media.document.mime_type or "video/mp4"
                         return 0, "video/mp4"
@@ -150,10 +162,22 @@ class HealthHandler(BaseHTTPRequestHandler):
 
         # Fetch Telegram Document Metadata
         async def fetch_document():
-            msg = await telethon_bot.get_messages(channel, ids=target_msg_id)
+            try:
+                msg = await telethon_bot.get_messages(channel, ids=target_msg_id)
+            except Exception:
+                try:
+                    await telethon_bot.get_dialogs(limit=100)
+                    msg = await telethon_bot.get_messages(channel, ids=target_msg_id)
+                except Exception:
+                    msg = None
+
             if not (msg and msg.media and hasattr(msg.media, 'document') and msg.media.document):
                 alt_channel = SERIES_CHANNEL if channel == MOVIES_CHANNEL else MOVIES_CHANNEL
-                msg = await telethon_bot.get_messages(alt_channel, ids=target_msg_id)
+                try:
+                    msg = await telethon_bot.get_messages(alt_channel, ids=target_msg_id)
+                except Exception:
+                    msg = None
+
             if msg and msg.media and hasattr(msg.media, 'document') and msg.media.document:
                 doc = msg.media.document
                 return doc, doc.size, doc.mime_type or "video/mp4"

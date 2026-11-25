@@ -1224,6 +1224,13 @@ async def main(state_dict: dict = None):
             me = await bot.get_me()
             print(f"Bot @{me.username} ({me.first_name}) is LIVE and LISTENING for messages!", flush=True)
 
+            # Warm up dialogs and channel entities into memory cache
+            try:
+                dialogs = await bot.get_dialogs(limit=100)
+                print(f"✅ Loaded {len(dialogs)} dialogs and channel entities into Telethon cache.", flush=True)
+            except Exception as de:
+                print(f"Notice loading dialogs: {de}", flush=True)
+
             if state_dict is not None:
                 state_dict["connected"] = True
                 state_dict["username"] = f"@{me.username}" if me.username else "@zxeeabot"
