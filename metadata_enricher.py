@@ -71,6 +71,87 @@ def get_tmdb_key():
     _key_idx += 1
     return k
 
+COMMON_FRANCHISE_MAP = {
+    'كيف تدرب تنينك': 'How to Train Your Dragon',
+    'عائلة كرودز': 'The Croods',
+    'الكرودز': 'The Croods',
+    'كرودز': 'The Croods',
+    'كاسكو': "The Emperor's New Groove",
+    'حياة الامبراطور الجديدة': "The Emperor's New Groove",
+    'اليس في بلاد العجائب': 'Alice in Wonderland',
+    'اطلانتس': 'Atlantis: The Lost Empire',
+    'حياة حشرة': "A Bug's Life",
+    'شركة المرعبين': 'Monsters, Inc.',
+    'جامعة المرعبين': 'Monsters University',
+    'البحث عن نيمو': 'Finding Nemo',
+    'البحث عن دوري': 'Finding Dory',
+    'خلطة بيطة بالصلصة': 'Ratatouille',
+    'راتاتوي': 'Ratatouille',
+    'الاسد الملك': 'The Lion King',
+    'الجميلة والوحش': 'Beauty and the Beast',
+    'علاء الدين': 'Aladdin',
+    'مولان': 'Mulan',
+    'طرزان': 'Tarzan',
+    'بوكاهونتاس': 'Pocahontas',
+    'بوكاهونتس': 'Pocahontas',
+    'كوكو': 'Coco',
+    'موانا': 'Moana',
+    'فروزن': 'Frozen',
+    'ملكة الثلج': 'Frozen',
+    'توي ستوري': 'Toy Story',
+    'قصة لعبة': 'Toy Story',
+    'حكاية لعبة': 'Toy Story',
+    'وال اي': 'WALL-E',
+    'قلبا وقالبا': 'Inside Out',
+    'لوكا': 'Luca',
+    'انكانتو': 'Encanto',
+    'رايا وآخر تنين': 'Raya and the Last Dragon',
+    'زوتروبوليس': 'Zootopia',
+    'مدغشقر': 'Madagascar',
+    'كونغ فو باندا': 'Kung Fu Panda',
+    'كونج فو باندا': 'Kung Fu Panda',
+    'شريك': 'Shrek',
+    'ايس ايج': 'Ice Age',
+    'العصر الجليدي': 'Ice Age',
+    'انا الحقير': 'Despicable Me',
+    'الحقير انا': 'Despicable Me',
+    'المينيونز': 'Minions',
+    'المتحولون': 'Transformers',
+    'فاست اند فيوريس': 'Fast & Furious',
+    'المهمة المستحيلة': 'Mission: Impossible',
+    'مهمة مستحيلة': 'Mission: Impossible',
+    'قراصنة الكاريبي': 'Pirates of the Caribbean',
+    'حرب النجوم': 'Star Wars',
+    'العاب الجوع': 'The Hunger Games',
+    'سيد الخواتم': 'The Lord of the Rings',
+    'الهوبيت': 'The Hobbit',
+    'ديدبول': 'Deadpool',
+    'الرجل الحديدي': 'Iron Man',
+    'كابتن امريكا': 'Captain America',
+    'المنتقمون': 'The Avengers',
+    'افينجرز': 'The Avengers',
+    'الرجل العنكبوت': 'Spider-Man',
+    'الرجل الخفاش': 'Batman',
+    'باتمان': 'Batman',
+    'الرجل الخارق': 'Superman',
+    'سوبرمان': 'Superman',
+    'جوكر': 'Joker',
+    'الجوكر': 'Joker',
+    'جون ويك': 'John Wick',
+    'ماتريكس': 'The Matrix',
+    'الماتريكس': 'The Matrix',
+    'ترمينيتور': 'The Terminator',
+    'المبيد': 'The Terminator',
+    'تيتانيك': 'Titanic',
+    'افاتار': 'Avatar',
+    'أفاتار': 'Avatar',
+    'انترستيلر': 'Interstellar',
+    'بين النجوم': 'Interstellar',
+    'انسبشن': 'Inception',
+    'استهلال': 'Inception',
+    'هاري بوتر': 'Harry Potter'
+}
+
 def generate_candidate_queries(raw_title: str) -> list:
     """
     Generates an ordered list of search variants from most specific to broader keywords.
@@ -80,6 +161,22 @@ def generate_candidate_queries(raw_title: str) -> list:
         clean_q = raw_title
 
     candidates = [clean_q]
+
+    # Check franchise mappings
+    norm_q = re.sub(r'[أإآا]', 'ا', clean_q).lower()
+    for ar_k, en_v in COMMON_FRANCHISE_MAP.items():
+        ar_k_norm = re.sub(r'[أإآا]', 'ا', ar_k).lower()
+        if ar_k_norm in norm_q:
+            candidates.append(en_v)
+            break
+
+    if hasattr(database, 'map_arabic_query'):
+        try:
+            for mapped in database.map_arabic_query(clean_q):
+                if mapped:
+                    candidates.append(mapped)
+        except Exception:
+            pass
 
     # 1. If English and Arabic mixed, split into separate queries
     en_words = re.findall(r'[a-zA-Z0-9\']+', clean_q)
@@ -250,20 +347,45 @@ def enrich_single_movie(movie: dict):
     return m_id, False, title, None
 
 def run_enrichment_batch(limit: int = 50, force_all: bool = False):
-    conn = database.get_connection()
-    cursor = conn.cursor()
+    movies = []
+    mdb = database.get_mongo_db()
+    if mdb is not None:
+        try:
+            col = mdb['media_items']
+            if force_all:
+                movies = list(col.find(
+                    {'is_series': 0},
+                    {'id': 1, 'title': 1, 'clean_title': 1}
+                ).sort([('id', -1)]).limit(limit))
+            else:
+                movies = list(col.find(
+                    {'is_series': 0, '$or': [{'poster_url': None}, {'poster_url': ''}]},
+                    {'id': 1, 'title': 1, 'clean_title': 1}
+                ).sort([('is_transferred', -1), ('id', -1)]).limit(limit))
+        except Exception as e:
+            print(f"MongoDB batch query notice: {e}")
+
+    if not movies:
+        try:
+            conn = database.get_connection()
+            cursor = conn.cursor()
+            if force_all:
+                cursor.execute("SELECT id, title, clean_title FROM media_items WHERE is_series = 0 ORDER BY id DESC LIMIT ?", (limit,))
+            else:
+                cursor.execute("""
+                SELECT id, title, clean_title FROM media_items 
+                WHERE is_series = 0 AND (poster_url IS NULL OR poster_url = '')
+                ORDER BY is_transferred DESC, id DESC LIMIT ?
+                """, (limit,))
+            movies = [dict(r) for r in cursor.fetchall()]
+            conn.close()
+        except Exception as e:
+            print(f"SQLite batch query notice: {e}")
+            return 0
     
-    if force_all:
-        cursor.execute("SELECT id, title, clean_title FROM media_items WHERE is_series = 0 ORDER BY id DESC LIMIT ?", (limit,))
-    else:
-        cursor.execute("""
-        SELECT id, title, clean_title FROM media_items 
-        WHERE is_series = 0 AND (poster_url IS NULL OR poster_url = '')
-        ORDER BY is_transferred DESC, id DESC LIMIT ?
-        """, (limit,))
-        
-    movies = [dict(r) for r in cursor.fetchall()]
-    conn.close()
+    if not movies:
+        print("No unenriched movies found in database.")
+        return 0
     
     print(f"Starting enrichment batch for {len(movies)} movies...")
     success_count = 0

@@ -864,37 +864,9 @@ def get_stats():
 def update_media_metadata(item_id: int, meta: dict):
     """
     Updates rich metadata (poster, backdrop, arabic title, description, year, rating, genres)
-    in both SQLite and MongoDB.
+    in both MongoDB and SQLite.
     """
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-    UPDATE media_items SET
-        poster_url = COALESCE(?, poster_url),
-        backdrop_url = COALESCE(?, backdrop_url),
-        arabic_title = COALESCE(?, arabic_title),
-        description = COALESCE(?, description),
-        release_year = COALESCE(?, release_year),
-        rating = COALESCE(?, rating),
-        genres = COALESCE(?, genres),
-        vote_count = COALESCE(?, vote_count),
-        tmdb_id = COALESCE(?, tmdb_id)
-    WHERE id = ?
-    """, (
-        meta.get('poster_url'),
-        meta.get('backdrop_url'),
-        meta.get('arabic_title'),
-        meta.get('description'),
-        meta.get('release_year'),
-        meta.get('rating'),
-        meta.get('genres'),
-        meta.get('vote_count'),
-        meta.get('tmdb_id'),
-        item_id
-    ))
-    conn.commit()
-    conn.close()
-
+    # 1. Update MongoDB Atlas
     mdb = get_mongo_db()
     if mdb is not None:
         try:
@@ -905,8 +877,41 @@ def update_media_metadata(item_id: int, meta: dict):
                     update_fields[k] = meta[k]
             if update_fields:
                 mdb['media_items'].update_one({'id': item_id}, {'$set': update_fields})
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"MongoDB update_media_metadata notice: {e}")
+
+    # 2. Update SQLite if available
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+        UPDATE media_items SET
+            poster_url = COALESCE(?, poster_url),
+            backdrop_url = COALESCE(?, backdrop_url),
+            arabic_title = COALESCE(?, arabic_title),
+            description = COALESCE(?, description),
+            release_year = COALESCE(?, release_year),
+            rating = COALESCE(?, rating),
+            genres = COALESCE(?, genres),
+            vote_count = COALESCE(?, vote_count),
+            tmdb_id = COALESCE(?, tmdb_id)
+        WHERE id = ?
+        """, (
+            meta.get('poster_url'),
+            meta.get('backdrop_url'),
+            meta.get('arabic_title'),
+            meta.get('description'),
+            meta.get('release_year'),
+            meta.get('rating'),
+            meta.get('genres'),
+            meta.get('vote_count'),
+            meta.get('tmdb_id'),
+            item_id
+        ))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
 
 def format_movie_for_api(row: dict) -> dict:
     genres_raw = row.get('genres') or ''
@@ -954,8 +959,55 @@ def get_miniapp_movies(page: int = 1, limit: int = 24, query: str = None,
                        genre: str = None, sort: str = 'featured', is_series: int = 0) -> dict:
     """
     High-performance paginated API for the Telegram Mini App.
+    Seamlessly works with MongoDB Atlas (primary on Render) and SQLite (local).
     """
     offset = max(0, (page - 1) * limit)
+    mdb = get_mongo_db()
+
+    if mdb is not None:
+        try:
+            col = mdb['media_items']
+            mongo_filter = {'is_series': is_series}
+            
+            if query and query.strip():
+                escaped_q = re.escape(query.strip())
+                mongo_filter['$or'] = [
+                    {'clean_title': {'$regex': escaped_q, '$options': 'i'}},
+                    {'arabic_title': {'$regex': escaped_q, '$options': 'i'}},
+                    {'title': {'$regex': escaped_q, '$options': 'i'}}
+                ]
+            
+            if genre and genre.strip() and genre.strip() != 'الكل':
+                escaped_g = re.escape(genre.strip())
+                mongo_filter['genres'] = {'$regex': escaped_g, '$options': 'i'}
+
+            total = col.count_documents(mongo_filter)
+
+            if sort == 'rating':
+                sort_spec = [('rating', -1), ('id', -1)]
+            elif sort == 'year':
+                sort_spec = [('release_year', -1), ('id', -1)]
+            elif sort == 'newest':
+                sort_spec = [('id', -1)]
+            else:  # 'featured'
+                sort_spec = [('poster_url', -1), ('rating', -1), ('id', -1)]
+
+            docs = list(col.find(mongo_filter).sort(sort_spec).skip(offset).limit(limit))
+            items = [format_movie_for_api(d) for d in docs]
+            total_pages = max(1, (total + limit - 1) // limit) if total > 0 else 1
+
+            return {
+                "items": items,
+                "total": total,
+                "page": page,
+                "limit": limit,
+                "total_pages": total_pages,
+                "has_more": page < total_pages
+            }
+        except Exception as e:
+            print(f"MongoDB get_miniapp_movies error, falling back to SQLite: {e}")
+
+    # Fallback to SQLite
     conditions = ["is_series = ?"]
     params = [is_series]
 
@@ -979,76 +1031,102 @@ def get_miniapp_movies(page: int = 1, limit: int = 24, query: str = None,
     else:  # 'featured'
         order_clause = "ORDER BY (CASE WHEN poster_url IS NOT NULL AND poster_url != '' THEN 1 ELSE 0 END) DESC, (CASE WHEN rating IS NOT NULL AND rating > 0 THEN rating ELSE 0 END) DESC, id DESC"
 
-    conn = get_connection()
-    cursor = conn.cursor()
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
 
-    count_sql = f"SELECT COUNT(*) FROM media_items {where_clause}"
-    cursor.execute(count_sql, params)
-    total = cursor.fetchone()[0]
+        count_sql = f"SELECT COUNT(*) FROM media_items {where_clause}"
+        cursor.execute(count_sql, params)
+        total = cursor.fetchone()[0]
 
-    select_sql = f"""
-    SELECT id, title, clean_title, arabic_title, poster_url, backdrop_url, 
-           description, release_year, rating, genres, quality, file_size, duration,
-           is_series, series_title, is_transferred
-    FROM media_items {where_clause} {order_clause} LIMIT ? OFFSET ?
-    """
-    query_params = params + [limit, offset]
-    cursor.execute(select_sql, query_params)
-    rows = [dict(r) for r in cursor.fetchall()]
-    conn.close()
+        select_sql = f"""
+        SELECT id, title, clean_title, arabic_title, poster_url, backdrop_url, 
+               description, release_year, rating, genres, quality, file_size, duration,
+               is_series, series_title, is_transferred
+        FROM media_items {where_clause} {order_clause} LIMIT ? OFFSET ?
+        """
+        query_params = params + [limit, offset]
+        cursor.execute(select_sql, query_params)
+        rows = [dict(r) for r in cursor.fetchall()]
+        conn.close()
 
-    items = [format_movie_for_api(r) for r in rows]
-    total_pages = max(1, (total + limit - 1) // limit) if total > 0 else 1
+        items = [format_movie_for_api(r) for r in rows]
+        total_pages = max(1, (total + limit - 1) // limit) if total > 0 else 1
 
-    return {
-        "items": items,
-        "total": total,
-        "page": page,
-        "limit": limit,
-        "total_pages": total_pages,
-        "has_more": page < total_pages
-    }
+        return {
+            "items": items,
+            "total": total,
+            "page": page,
+            "limit": limit,
+            "total_pages": total_pages,
+            "has_more": page < total_pages
+        }
+    except Exception as e:
+        return {
+            "items": [],
+            "total": 0,
+            "page": page,
+            "limit": limit,
+            "total_pages": 1,
+            "has_more": False,
+            "error": str(e)
+        }
 
 def get_movie_by_id(item_id: int):
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-    SELECT id, title, clean_title, arabic_title, poster_url, backdrop_url, 
-           description, release_year, rating, genres, quality, file_size, duration,
-           is_series, series_title, season_num, episode_num, is_transferred
-    FROM media_items WHERE id = ?
-    """, (item_id,))
-    row = cursor.fetchone()
-    conn.close()
-    if not row:
-        mdb = get_mongo_db()
-        if mdb is not None:
+    mdb = get_mongo_db()
+    if mdb is not None:
+        try:
             doc = mdb['media_items'].find_one({'id': item_id})
-            return format_movie_for_api(doc) if doc else None
-        return None
-    return format_movie_for_api(dict(row))
+            if doc:
+                return format_movie_for_api(doc)
+        except Exception:
+            pass
+
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+        SELECT id, title, clean_title, arabic_title, poster_url, backdrop_url, 
+               description, release_year, rating, genres, quality, file_size, duration,
+               is_series, series_title, season_num, episode_num, is_transferred
+        FROM media_items WHERE id = ?
+        """, (item_id,))
+        row = cursor.fetchone()
+        conn.close()
+        if row:
+            return format_movie_for_api(dict(row))
+    except Exception:
+        pass
+    return None
 
 def get_featured_movies(limit: int = 6) -> list:
     """
     Fetches the highest rated movies with poster & backdrop for the top carousel.
     """
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-    SELECT id, title, clean_title, arabic_title, poster_url, backdrop_url, 
-           description, release_year, rating, genres, quality, file_size, duration,
-           is_series, series_title, is_transferred
-    FROM media_items 
-    WHERE is_series = 0 AND poster_url IS NOT NULL AND poster_url != ''
-    ORDER BY (CASE WHEN backdrop_url IS NOT NULL AND backdrop_url != '' THEN 2 ELSE 1 END) DESC,
-             (CASE WHEN rating IS NOT NULL THEN rating ELSE 0 END) DESC, id DESC
-    LIMIT ?
-    """, (limit,))
-    rows = [dict(r) for r in cursor.fetchall()]
-    conn.close()
+    mdb = get_mongo_db()
+    if mdb is not None:
+        try:
+            col = mdb['media_items']
+            docs = list(col.find({
+                'is_series': 0, 
+                'poster_url': {'$nin': [None, '']}
+            }).sort([('backdrop_url', -1), ('rating', -1), ('id', -1)]).limit(limit))
+            
+            if len(docs) < limit:
+                needed = limit - len(docs)
+                existing_ids = [d.get('id') for d in docs]
+                extra = list(col.find({
+                    'is_series': 0,
+                    'id': {'$nin': existing_ids}
+                }).sort([('id', -1)]).limit(needed))
+                docs.extend(extra)
+            
+            return [format_movie_for_api(d) for d in docs]
+        except Exception as e:
+            print(f"MongoDB get_featured_movies error: {e}")
 
-    if len(rows) < limit:
-        # Fallback to any top movies
+    # SQLite fallback
+    try:
         conn = get_connection()
         cursor = conn.cursor()
         cursor.execute("""
@@ -1056,13 +1134,31 @@ def get_featured_movies(limit: int = 6) -> list:
                description, release_year, rating, genres, quality, file_size, duration,
                is_series, series_title, is_transferred
         FROM media_items 
-        WHERE is_series = 0 
-        ORDER BY id DESC LIMIT ?
+        WHERE is_series = 0 AND poster_url IS NOT NULL AND poster_url != ''
+        ORDER BY (CASE WHEN backdrop_url IS NOT NULL AND backdrop_url != '' THEN 2 ELSE 1 END) DESC,
+                 (CASE WHEN rating IS NOT NULL THEN rating ELSE 0 END) DESC, id DESC
+        LIMIT ?
         """, (limit,))
         rows = [dict(r) for r in cursor.fetchall()]
         conn.close()
 
-    return [format_movie_for_api(r) for r in rows]
+        if len(rows) < limit:
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+            SELECT id, title, clean_title, arabic_title, poster_url, backdrop_url, 
+                   description, release_year, rating, genres, quality, file_size, duration,
+                   is_series, series_title, is_transferred
+            FROM media_items 
+            WHERE is_series = 0 
+            ORDER BY id DESC LIMIT ?
+            """, (limit,))
+            rows = [dict(r) for r in cursor.fetchall()]
+            conn.close()
+
+        return [format_movie_for_api(r) for r in rows]
+    except Exception:
+        return []
 
 def get_genres_summary() -> list:
     """
@@ -1073,17 +1169,34 @@ def get_genres_summary() -> list:
         "رعب", "إثارة", "جريمة", "رسوم متحركة", "فانتازيا",
         "غموض", "رومانسي", "وثائقي", "عائلي", "حرب"
     ]
-    conn = get_connection()
-    cursor = conn.cursor()
     results = []
-    for g in standard_genres:
-        cursor.execute("SELECT COUNT(*) FROM media_items WHERE is_series = 0 AND genres LIKE ?", (f"%{g}%",))
-        count = cursor.fetchone()[0]
-        if count > 0:
-            results.append({"genre": g, "count": count})
-    conn.close()
-    results.sort(key=lambda x: x['count'], reverse=True)
-    return results
+
+    mdb = get_mongo_db()
+    if mdb is not None:
+        try:
+            col = mdb['media_items']
+            for g in standard_genres:
+                count = col.count_documents({'is_series': 0, 'genres': {'$regex': g}})
+                if count > 0:
+                    results.append({"genre": g, "count": count})
+            results.sort(key=lambda x: x['count'], reverse=True)
+            return results
+        except Exception as e:
+            print(f"MongoDB get_genres_summary error: {e}")
+
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        for g in standard_genres:
+            cursor.execute("SELECT COUNT(*) FROM media_items WHERE is_series = 0 AND genres LIKE ?", (f"%{g}%",))
+            count = cursor.fetchone()[0]
+            if count > 0:
+                results.append({"genre": g, "count": count})
+        conn.close()
+        results.sort(key=lambda x: x['count'], reverse=True)
+        return results
+    except Exception:
+        return [{"genre": g, "count": 0} for g in standard_genres[:6]]
 
 if __name__ == "__main__":
     init_db()

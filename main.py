@@ -291,6 +291,14 @@ def keep_alive_watchdog():
         time.sleep(50)
 
 async def main():
+    # 0. Initialize Database Schema and Indexes (both MongoDB and SQLite)
+    try:
+        import database
+        database.init_db()
+        print("✅ Database schema and indexes initialized.")
+    except Exception as e:
+        print(f"Notice during init_db: {e}")
+
     # 1. Start HTTP Server in daemon thread (serves Mini App & APIs)
     t_http = threading.Thread(target=start_http_server, daemon=True)
     t_http.start()
