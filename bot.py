@@ -39,8 +39,75 @@ if not BOT_TOKEN:
 BOT_USERNAME = "@zxeeabot"
 MOVIES_CHANNEL = -1004477353424
 SERIES_CHANNEL = -1004453601662
+CARTOON_MOVIES_CHANNEL = -1003901894816
+CARTOON_SERIES_CHANNEL = -1004402755149
+TURKISH_CHANNEL = -1004406749578
+KOREAN_CHANNEL = -1004440175699
+
 MOVIES_PEER = types.InputPeerChannel(channel_id=4477353424, access_hash=-8914780067918483052)
 SERIES_PEER = types.InputPeerChannel(channel_id=4453601662, access_hash=-9118092575347429633)
+CARTOON_MOVIES_PEER = types.InputPeerChannel(channel_id=3901894816, access_hash=1540610137206805463)
+CARTOON_SERIES_PEER = types.InputPeerChannel(channel_id=4402755149, access_hash=-562466612351977560)
+TURKISH_PEER = types.InputPeerChannel(channel_id=4406749578, access_hash=-8231970028434736864)
+KOREAN_PEER = types.InputPeerChannel(channel_id=4440175699, access_hash=-6372852165671040727)
+
+CHANNEL_PEERS_MAP = {
+    MOVIES_CHANNEL: MOVIES_PEER,
+    SERIES_CHANNEL: SERIES_PEER,
+    CARTOON_MOVIES_CHANNEL: CARTOON_MOVIES_PEER,
+    CARTOON_SERIES_CHANNEL: CARTOON_SERIES_PEER,
+    TURKISH_CHANNEL: TURKISH_PEER,
+    KOREAN_CHANNEL: KOREAN_PEER,
+}
+
+def get_channel_peers_for_item(item):
+    """
+    Returns ordered list of candidate peers to fetch target_msg_id from.
+    1. Exact channel_id if set on item.
+    2. Category-based peer (cartoon movies/series, turkish, korean).
+    3. Primary and fallback peers (movies/series).
+    """
+    peers = []
+    if not item:
+        return [MOVIES_PEER, SERIES_PEER]
+    cid = item.get('channel_id')
+    if cid and cid in CHANNEL_PEERS_MAP:
+        peers.append(CHANNEL_PEERS_MAP[cid])
+
+    is_cartoon = item.get('is_cartoon', 0)
+    is_series = item.get('is_series', 0)
+    raw = item.get('raw_caption', '') or ''
+    genres = str(item.get('genres', '') or '')
+    title = item.get('clean_title', '') or ''
+
+    if is_cartoon or 'كرتون' in raw or 'أنمي' in raw or 'انمي' in raw or 'رسوم متحركة' in genres or 'كرتون' in title:
+        if is_series:
+            if CARTOON_SERIES_PEER not in peers:
+                peers.append(CARTOON_SERIES_PEER)
+            if CARTOON_MOVIES_PEER not in peers:
+                peers.append(CARTOON_MOVIES_PEER)
+        else:
+            if CARTOON_MOVIES_PEER not in peers:
+                peers.append(CARTOON_MOVIES_PEER)
+            if CARTOON_SERIES_PEER not in peers:
+                peers.append(CARTOON_SERIES_PEER)
+
+    if 'تركي' in raw or 'تركية' in raw or 'تركي' in title:
+        if TURKISH_PEER not in peers:
+            peers.append(TURKISH_PEER)
+
+    if is_series:
+        if SERIES_PEER not in peers:
+            peers.append(SERIES_PEER)
+        if MOVIES_PEER not in peers:
+            peers.append(MOVIES_PEER)
+    else:
+        if MOVIES_PEER not in peers:
+            peers.append(MOVIES_PEER)
+        if SERIES_PEER not in peers:
+            peers.append(SERIES_PEER)
+
+    return peers
 
 COVER_IMAGE_PATH = os.path.join(os.path.dirname(__file__), "custom_cover.jpg")
 THUMB_IMAGE_PATH = os.path.join(os.path.dirname(__file__), "custom_thumb_320.jpg")
@@ -984,10 +1051,15 @@ async def deliver_episode_by_id(chat_id, ep_id, callback_event=None, reply_to=No
             await status_msg.edit("⚠️ الحلقة قيد التجهيز والنقل، يرجى المحاولة بعد قليل.")
             return
 
-        storage_msg = await bot.get_messages(SERIES_PEER, ids=target_msg_id)
-        if not (storage_msg and storage_msg.media):
-            # Channel fallback
-            storage_msg = await bot.get_messages(MOVIES_PEER, ids=target_msg_id)
+        candidate_peers = get_channel_peers_for_item(item)
+        storage_msg = None
+        for peer in candidate_peers:
+            try:
+                storage_msg = await bot.get_messages(peer, ids=target_msg_id)
+                if storage_msg and storage_msg.media:
+                    break
+            except Exception:
+                pass
 
         if storage_msg and storage_msg.media:
             if not verify_content_integrity(item, storage_msg):
@@ -1059,10 +1131,15 @@ async def deliver_movie_by_id(chat_id, movie_id, callback_event=None, reply_to=N
                 await bot.send_message(chat_id, "⚠️ الفيلم قيد التجهيز والنقل، يرجى المحاولة بعد قليل.", reply_to=reply_to)
             return
 
-        storage_msg = await bot.get_messages(MOVIES_PEER, ids=target_msg_id)
-        if not (storage_msg and storage_msg.media):
-            # Fallback to SERIES_PEER
-            storage_msg = await bot.get_messages(SERIES_PEER, ids=target_msg_id)
+        candidate_peers = get_channel_peers_for_item(item)
+        storage_msg = None
+        for peer in candidate_peers:
+            try:
+                storage_msg = await bot.get_messages(peer, ids=target_msg_id)
+                if storage_msg and storage_msg.media:
+                    break
+            except Exception:
+                pass
 
         if storage_msg and storage_msg.media:
             if not verify_content_integrity(item, storage_msg):

@@ -913,7 +913,33 @@ def update_media_metadata(item_id: int, meta: dict):
     except Exception:
         pass
 
+MOVIES_CHANNEL = -1004477353424
+SERIES_CHANNEL = -1004453601662
+CARTOON_MOVIES_CHANNEL = -1003901894816
+CARTOON_SERIES_CHANNEL = -1004402755149
+TURKISH_CHANNEL = -1004406749578
+KOREAN_CHANNEL = -1004440175699
+
+def get_channel_for_item(item: dict) -> int:
+    if not item:
+        return MOVIES_CHANNEL
+    cid = item.get('channel_id')
+    if cid:
+        return cid
+    raw = item.get('raw_caption', '') or ''
+    genres = str(item.get('genres', '') or '')
+    title = item.get('clean_title', '') or ''
+    is_series = item.get('is_series', 0)
+    is_cartoon = item.get('is_cartoon', 0)
+    if is_cartoon or 'كرتون' in raw or 'أنمي' in raw or 'انمي' in raw or 'رسوم متحركة' in genres or 'كرتون' in title:
+        return CARTOON_SERIES_CHANNEL if is_series else CARTOON_MOVIES_CHANNEL
+    if 'تركي' in raw or 'تركية' in raw or 'تركي' in title:
+        return TURKISH_CHANNEL
+    return SERIES_CHANNEL if is_series else MOVIES_CHANNEL
+
 def format_movie_for_api(row: dict) -> dict:
+    if not row:
+        return {}
     genres_raw = row.get('genres') or ''
     genres_list = [g.strip() for g in genres_raw.split(',') if g.strip()] if isinstance(genres_raw, str) else (genres_raw or [])
     
@@ -935,25 +961,72 @@ def format_movie_for_api(row: dict) -> dict:
     else:
         dur_str = None
 
+    # Cast handling
+    cast_data = row.get('cast')
+    if isinstance(cast_data, str) and (cast_data.startswith('[') or cast_data.startswith('{')):
+        try:
+            import json
+            cast_data = json.loads(cast_data)
+        except Exception:
+            pass
+    elif not cast_data and row.get('cast_json'):
+        try:
+            import json
+            cast_data = json.loads(row.get('cast_json'))
+        except Exception:
+            pass
+    if not isinstance(cast_data, list):
+        cast_data = []
+
+    cast_list = []
+    for c in cast_data:
+        if isinstance(c, dict):
+            p_url = c.get('profile_url') or c.get('avatar') or ""
+            cast_list.append({
+                "name": c.get('name') or c.get('actor_name') or "",
+                "character": c.get('character') or c.get('role') or "",
+                "profile_url": p_url,
+                "avatar": p_url
+            })
+        elif isinstance(c, str):
+            cast_list.append({
+                "name": c,
+                "character": "شخصية رئيسية",
+                "profile_url": "",
+                "avatar": ""
+            })
+
+    # Channel resolution
+    channel_id = row.get('channel_id') or get_channel_for_item(row)
+    full_synopsis = row.get('description') or row.get('full_synopsis') or ""
+
     return {
         "id": row.get('id'),
         "title": row.get('clean_title') or row.get('title') or "بدون عنوان",
         "arabic_title": row.get('arabic_title') or "",
         "poster_url": row.get('poster_url') or "",
         "backdrop_url": row.get('backdrop_url') or "",
-        "description": row.get('description') or "",
+        "description": full_synopsis,
+        "full_synopsis": full_synopsis,
+        "english_description": row.get('english_description') or "",
         "release_year": row.get('release_year'),
         "rating": round(float(row['rating']), 1) if row.get('rating') else None,
         "genres": genres_list,
+        "director": row.get('director') or "",
+        "cast": cast_list,
         "quality": row.get('quality') or "1080p",
         "file_size": f_size,
         "size_str": size_str,
         "duration": dur_sec,
         "duration_str": dur_str,
         "is_series": row.get('is_series', 0),
+        "is_cartoon": row.get('is_cartoon', 0),
         "series_title": row.get('series_title'),
+        "season_num": row.get('season_num', 1),
+        "episode_num": row.get('episode_num', 0),
         "is_transferred": row.get('is_transferred', 0),
-        "target_msg_id": row.get('target_msg_id')
+        "target_msg_id": row.get('target_msg_id'),
+        "channel_id": channel_id
     }
 
 def get_miniapp_movies(page: int = 1, limit: int = 24, query: str = None, 
@@ -974,17 +1047,29 @@ def get_miniapp_movies(page: int = 1, limit: int = 24, query: str = None,
         try:
             col = mdb['media_items']
             mongo_filter = {}
-            if content_type == 'movies' or is_series == 0:
+            if content_type == 'cartoons':
+                mongo_filter['$or'] = [
+                    {'is_cartoon': 1},
+                    {'genres': {'$regex': 'رسوم متحركة|أنمي|كرتون', '$options': 'i'}}
+                ]
+            elif content_type == 'movies' or is_series == 0:
                 mongo_filter['is_series'] = 0
 
             if query and query.strip():
                 escaped_q = re.escape(query.strip())
-                mongo_filter['$or'] = [
+                q_or = [
                     {'clean_title': {'$regex': escaped_q, '$options': 'i'}},
                     {'arabic_title': {'$regex': escaped_q, '$options': 'i'}},
                     {'title': {'$regex': escaped_q, '$options': 'i'}},
-                    {'series_title': {'$regex': escaped_q, '$options': 'i'}}
+                    {'series_title': {'$regex': escaped_q, '$options': 'i'}},
+                    {'director': {'$regex': escaped_q, '$options': 'i'}},
+                    {'cast.name': {'$regex': escaped_q, '$options': 'i'}}
                 ]
+                if '$or' in mongo_filter:
+                    existing_or = mongo_filter.pop('$or')
+                    mongo_filter['$and'] = [{'$or': existing_or}, {'$or': q_or}]
+                else:
+                    mongo_filter['$or'] = q_or
             
             if genre and genre.strip() and genre.strip() != 'الكل':
                 escaped_g = re.escape(genre.strip())
@@ -1020,15 +1105,17 @@ def get_miniapp_movies(page: int = 1, limit: int = 24, query: str = None,
     # Fallback to SQLite
     conditions = []
     params = []
-    if content_type == 'movies' or is_series == 0:
+    if content_type == 'cartoons':
+        conditions.append("(is_cartoon = 1 OR genres LIKE '%رسوم متحركة%' OR genres LIKE '%أنمي%' OR clean_title LIKE '%كرتون%')")
+    elif content_type == 'movies' or is_series == 0:
         conditions.append("is_series = 0")
     elif content_type == 'series' or is_series == 1:
         conditions.append("is_series = 1")
 
     if query and query.strip():
         q = f"%{query.strip()}%"
-        conditions.append("(clean_title LIKE ? OR arabic_title LIKE ? OR title LIKE ?)")
-        params.extend([q, q, q])
+        conditions.append("(clean_title LIKE ? OR arabic_title LIKE ? OR title LIKE ? OR director LIKE ?)")
+        params.extend([q, q, q, q])
 
     if genre and genre.strip() and genre.strip() != 'الكل':
         conditions.append("genres LIKE ?")
@@ -1056,7 +1143,8 @@ def get_miniapp_movies(page: int = 1, limit: int = 24, query: str = None,
         select_sql = f"""
         SELECT id, title, clean_title, arabic_title, poster_url, backdrop_url, 
                description, release_year, rating, genres, quality, file_size, duration,
-               is_series, series_title, is_transferred
+               is_series, series_title, is_transferred, target_msg_id,
+               director, cast_json, english_description, channel_id, is_cartoon
         FROM media_items {where_clause} {order_clause} LIMIT ? OFFSET ?
         """
         query_params = params + [limit, offset]
@@ -1113,6 +1201,12 @@ def get_miniapp_series(page: int = 1, limit: int = 24, query: str = None) -> dic
         rating = 8.6
         desc = f"مسلسل {st} متوفر بجميع مواسمه وحلقاته كاملة للمشاهدة والتحميل بجودة عالية."
         genres = ["دراما", "إثارة"]
+        cast = []
+        director = ""
+        english_desc = ""
+        release_yr = 2023
+        is_cart = 0
+        chan_id = SERIES_CHANNEL
 
         if mdb is not None:
             try:
@@ -1125,6 +1219,12 @@ def get_miniapp_series(page: int = 1, limit: int = 24, query: str = None) -> dic
                     backdrop = first_doc.get('backdrop_url') or ""
                     rating = round(float(first_doc['rating']), 1) if first_doc.get('rating') else 8.6
                     desc = first_doc.get('description') or desc
+                    english_desc = first_doc.get('english_description') or ""
+                    director = first_doc.get('director') or ""
+                    cast = first_doc.get('cast') or []
+                    release_yr = first_doc.get('release_year') or 2023
+                    is_cart = first_doc.get('is_cartoon', 0)
+                    chan_id = first_doc.get('channel_id') or get_channel_for_item(first_doc)
                     if first_doc.get('genres'):
                         g_raw = first_doc.get('genres')
                         genres = [g.strip() for g in g_raw.split(',') if g.strip()] if isinstance(g_raw, str) else g_raw
@@ -1140,10 +1240,16 @@ def get_miniapp_series(page: int = 1, limit: int = 24, query: str = None) -> dic
             "poster_url": poster,
             "backdrop_url": backdrop,
             "description": desc,
+            "full_synopsis": desc,
+            "english_description": english_desc,
+            "director": director,
+            "cast": cast,
             "rating": rating,
-            "release_year": 2023,
+            "release_year": release_yr,
             "genres": genres,
             "is_series": 1,
+            "is_cartoon": is_cart,
+            "channel_id": chan_id,
             "seasons_count": s.get('seasons_count', 1),
             "episodes_count": s.get('episodes_count', 1),
             "quality": "1080p",
@@ -1250,7 +1356,8 @@ def get_movie_by_id(item_id: int):
         cursor.execute("""
         SELECT id, title, clean_title, arabic_title, poster_url, backdrop_url, 
                description, release_year, rating, genres, quality, file_size, duration,
-               is_series, series_title, season_num, episode_num, is_transferred, target_msg_id
+               is_series, series_title, season_num, episode_num, is_transferred, target_msg_id,
+               director, cast_json, english_description, channel_id, is_cartoon
         FROM media_items WHERE id = ?
         """, (item_id,))
         row = cursor.fetchone()
@@ -1294,7 +1401,8 @@ def get_featured_movies(limit: int = 6) -> list:
         cursor.execute("""
         SELECT id, title, clean_title, arabic_title, poster_url, backdrop_url, 
                description, release_year, rating, genres, quality, file_size, duration,
-               is_series, series_title, is_transferred
+               is_series, series_title, is_transferred, target_msg_id,
+               director, cast_json, english_description, channel_id, is_cartoon
         FROM media_items 
         WHERE is_series = 0 AND poster_url IS NOT NULL AND poster_url != ''
         ORDER BY (CASE WHEN backdrop_url IS NOT NULL AND backdrop_url != '' THEN 2 ELSE 1 END) DESC,
@@ -1310,7 +1418,8 @@ def get_featured_movies(limit: int = 6) -> list:
             cursor.execute("""
             SELECT id, title, clean_title, arabic_title, poster_url, backdrop_url, 
                    description, release_year, rating, genres, quality, file_size, duration,
-                   is_series, series_title, is_transferred
+                   is_series, series_title, is_transferred, target_msg_id,
+                   director, cast_json, english_description, channel_id, is_cartoon
             FROM media_items 
             WHERE is_series = 0 
             ORDER BY id DESC LIMIT ?

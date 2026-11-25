@@ -4,8 +4,10 @@ import sys
 import json
 import time
 import queue
+import socket
+import re
 from collections import deque
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import HTTPServer, ThreadingHTTPServer, BaseHTTPRequestHandler
 import threading
 from datetime import datetime
 
@@ -55,6 +57,134 @@ BOT_RUNTIME_STATE = {
     "last_error": None
 }
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# HIGH-SPEED VIDEO STREAMING CACHE & UTILITIES
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+_DOC_METADATA_CACHE = {}
+_DOC_CACHE_LOCK = threading.Lock()
+_CACHE_TTL = 7200  # 2 hours
+
+def get_cached_media_document(target_msg_id):
+    now = time.time()
+    with _DOC_CACHE_LOCK:
+        if target_msg_id in _DOC_METADATA_CACHE:
+            doc, file_size, mime_type, cached_time = _DOC_METADATA_CACHE[target_msg_id]
+            if now - cached_time < _CACHE_TTL:
+                return doc, file_size, mime_type
+            else:
+                _DOC_METADATA_CACHE.pop(target_msg_id, None)
+    return None
+
+def set_cached_media_document(target_msg_id, doc, file_size, mime_type):
+    now = time.time()
+    with _DOC_CACHE_LOCK:
+        if len(_DOC_METADATA_CACHE) >= 2000:
+            oldest = sorted(_DOC_METADATA_CACHE.items(), key=lambda x: x[1][3])[:200]
+            for k, _ in oldest:
+                _DOC_METADATA_CACHE.pop(k, None)
+        _DOC_METADATA_CACHE[target_msg_id] = (doc, file_size, mime_type, now)
+
+def parse_byte_range(range_header: str, file_size: int):
+    """
+    Parses RFC 7233 Range header.
+    Returns: (start, end, is_range_request)
+    Handles:
+      - bytes=start-end (e.g. bytes=0-1048575)
+      - bytes=start-    (e.g. bytes=0- or bytes=2097152-)
+      - bytes=-suffix   (e.g. bytes=-1048576)
+    """
+    if not range_header or not range_header.strip().startswith("bytes="):
+        return 0, file_size - 1, False
+
+    raw = range_header.strip()[6:].strip()
+    if "," in raw:
+        raw = raw.split(",")[0].strip()
+
+    if raw.startswith("-"):
+        try:
+            suffix = int(raw[1:])
+            start = max(0, file_size - suffix)
+            end = file_size - 1
+            return start, end, True
+        except ValueError:
+            return 0, file_size - 1, False
+
+    if "-" in raw:
+        parts = raw.split("-", 1)
+        try:
+            start = int(parts[0])
+            if parts[1].strip():
+                end = min(int(parts[1]), file_size - 1)
+            else:
+                end = file_size - 1
+            return start, end, True
+        except ValueError:
+            return 0, file_size - 1, False
+
+    return 0, file_size - 1, False
+
+def resolve_media_target(item_id: int):
+    """
+    Resolves Telegram document metadata for item_id.
+    Uses in-memory cache to eliminate redundant database and MTProto queries.
+    Returns (target_msg_id, ch_peer, alt_peer, doc, file_size, mime_type)
+    """
+    import database
+    from bot import bot as telethon_bot, MOVIES_PEER, SERIES_PEER, get_channel_peers_for_item
+
+    item = database.get_movie_by_id(item_id)
+    if not item or not item.get('target_msg_id'):
+        mdb = database.get_mongo_db()
+        if mdb:
+            doc_entry = mdb['media_items'].find_one({'id': item_id})
+            if doc_entry and doc_entry.get('target_msg_id'):
+                if not item:
+                    item = database.format_movie_for_api(doc_entry)
+                item['target_msg_id'] = doc_entry.get('target_msg_id')
+                item['is_series'] = doc_entry.get('is_series', 0)
+                item['channel_id'] = doc_entry.get('channel_id')
+                item['is_cartoon'] = doc_entry.get('is_cartoon', 0)
+
+    if not item or not item.get('target_msg_id'):
+        return None, None, None, None, 0, "video/mp4"
+
+    target_msg_id = item['target_msg_id']
+    candidate_peers = get_channel_peers_for_item(item)
+    ch_peer = candidate_peers[0] if candidate_peers else (MOVIES_PEER if item.get('is_series') == 0 else SERIES_PEER)
+    alt_peer = candidate_peers[1] if len(candidate_peers) > 1 else (SERIES_PEER if ch_peer == MOVIES_PEER else MOVIES_PEER)
+
+    # 1. Check in-memory metadata cache (0ms instant lookup)
+    cache_key = f"{getattr(ch_peer, 'channel_id', 0)}_{target_msg_id}"
+    cached = get_cached_media_document(cache_key) or get_cached_media_document(target_msg_id)
+    if cached:
+        doc, file_size, mime_type = cached
+        return target_msg_id, ch_peer, alt_peer, doc, file_size, mime_type
+
+    # 2. Query Telegram bot if not cached
+    if BOT_ASYNC_LOOP is None or not telethon_bot:
+        return target_msg_id, ch_peer, alt_peer, None, 0, "video/mp4"
+
+    async def fetch_document():
+        for peer in candidate_peers:
+            try:
+                msg = await telethon_bot.get_messages(peer, ids=target_msg_id)
+                if msg and msg.media and hasattr(msg.media, 'document') and msg.media.document:
+                    d = msg.media.document
+                    return d, d.size, d.mime_type or "video/mp4"
+            except Exception as e:
+                pass
+        return None, 0, "video/mp4"
+
+    try:
+        fut = asyncio.run_coroutine_threadsafe(fetch_document(), BOT_ASYNC_LOOP)
+        doc, file_size, mime_type = fut.result(timeout=15)
+        if doc and file_size > 0:
+            set_cached_media_document(cache_key, doc, file_size, mime_type)
+        return target_msg_id, ch_peer, alt_peer, doc, file_size, mime_type
+    except Exception as e:
+        print(f"resolve_media_target fetch error: {e}", flush=True)
+        return target_msg_id, ch_peer, alt_peer, None, 0, "video/mp4"
+
 # 1. Health check, Status, Mini App & API HTTP Server
 class HealthHandler(BaseHTTPRequestHandler):
     def send_cors_headers(self):
@@ -76,48 +206,34 @@ class HealthHandler(BaseHTTPRequestHandler):
             try:
                 parts = path.strip("/").split("/")
                 item_id = int(parts[-1])
-                import database
-                from bot import bot as telethon_bot, MOVIES_PEER, SERIES_PEER
-                item = database.get_movie_by_id(item_id)
-                if not item or not item.get('target_msg_id'):
-                    mdb = database.get_mongo_db()
-                    if mdb:
-                        doc = mdb['media_items'].find_one({'id': item_id})
-                        if doc and doc.get('target_msg_id'):
-                            if not item:
-                                item = database.format_movie_for_api(doc)
-                            item['target_msg_id'] = doc.get('target_msg_id')
-                            item['is_series'] = doc.get('is_series', 0)
-                if item and item.get('target_msg_id') and BOT_ASYNC_LOOP and telethon_bot:
-                    target_msg_id = item['target_msg_id']
-                    ch_peer = MOVIES_PEER if item.get('is_series') == 0 else SERIES_PEER
-                    alt_peer = SERIES_PEER if ch_peer == MOVIES_PEER else MOVIES_PEER
-                    async def fetch_meta():
-                        msg = None
-                        try:
-                            msg = await telethon_bot.get_messages(ch_peer, ids=target_msg_id)
-                        except Exception:
-                            pass
-
-                        if not (msg and msg.media and hasattr(msg.media, 'document') and msg.media.document):
-                            try:
-                                msg = await telethon_bot.get_messages(alt_peer, ids=target_msg_id)
-                            except Exception:
-                                pass
-
-                        if msg and msg.media and hasattr(msg.media, 'document') and msg.media.document:
-                            return msg.media.document.size, msg.media.document.mime_type or "video/mp4"
-                        return 0, "video/mp4"
-                    fut = asyncio.run_coroutine_threadsafe(fetch_meta(), BOT_ASYNC_LOOP)
-                    f_size, m_type = fut.result(timeout=10)
-                    if f_size > 0:
-                        self.send_response(200)
-                        self.send_header('Content-Type', m_type)
-                        self.send_header('Content-Length', str(f_size))
-                        self.send_header('Accept-Ranges', 'bytes')
-                        self.send_cors_headers()
-                        self.end_headers()
-                        return
+                target_msg_id, ch_peer, alt_peer, doc, file_size, mime_type = resolve_media_target(item_id)
+                if doc and file_size > 0:
+                    range_header = self.headers.get('Range')
+                    if range_header:
+                        start, end, is_range = parse_byte_range(range_header, file_size)
+                        if is_range and start < file_size and start <= end:
+                            content_length = end - start + 1
+                            self.send_response(206)
+                            self.send_header('Content-Type', mime_type or 'video/mp4')
+                            self.send_header('Content-Range', f'bytes {start}-{end}/{file_size}')
+                            self.send_header('Content-Length', str(content_length))
+                            self.send_header('Accept-Ranges', 'bytes')
+                            self.send_header('Cache-Control', 'public, max-age=3600, no-transform')
+                            self.send_header('Connection', 'keep-alive')
+                            self.send_header('Keep-Alive', 'timeout=60, max=100')
+                            self.send_cors_headers()
+                            self.end_headers()
+                            return
+                    self.send_response(200)
+                    self.send_header('Content-Type', mime_type or 'video/mp4')
+                    self.send_header('Content-Length', str(file_size))
+                    self.send_header('Accept-Ranges', 'bytes')
+                    self.send_header('Cache-Control', 'public, max-age=3600, no-transform')
+                    self.send_header('Connection', 'keep-alive')
+                    self.send_header('Keep-Alive', 'timeout=60, max=100')
+                    self.send_cors_headers()
+                    self.end_headers()
+                    return
             except Exception:
                 pass
         self.send_response(200)
@@ -125,21 +241,11 @@ class HealthHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def handle_video_stream(self, item_id: int):
-        import database
-        from bot import bot as telethon_bot, MOVIES_PEER, SERIES_PEER
+        from bot import bot as telethon_bot
 
-        item = database.get_movie_by_id(item_id)
-        if not item or not item.get('target_msg_id'):
-            mdb = database.get_mongo_db()
-            if mdb:
-                doc = mdb['media_items'].find_one({'id': item_id})
-                if doc and doc.get('target_msg_id'):
-                    if not item:
-                        item = database.format_movie_for_api(doc)
-                    item['target_msg_id'] = doc.get('target_msg_id')
-                    item['is_series'] = doc.get('is_series', 0)
+        target_msg_id, ch_peer, alt_peer, doc, file_size, mime_type = resolve_media_target(item_id)
 
-        if not item or not item.get('target_msg_id'):
+        if not target_msg_id:
             self.send_response(404)
             self.send_header('Content-Type', 'application/json')
             self.send_cors_headers()
@@ -147,44 +253,11 @@ class HealthHandler(BaseHTTPRequestHandler):
             self.wfile.write(b'{"error": "Video not found or not yet transferred"}')
             return
 
-        target_msg_id = item['target_msg_id']
-        ch_peer = MOVIES_PEER if item.get('is_series') == 0 else SERIES_PEER
-        alt_peer = SERIES_PEER if ch_peer == MOVIES_PEER else MOVIES_PEER
-
         if BOT_ASYNC_LOOP is None or not telethon_bot:
             self.send_response(503)
             self.send_cors_headers()
             self.end_headers()
             self.wfile.write(b'{"error": "Bot streaming service initializing"}')
-            return
-
-        # Fetch Telegram Document Metadata
-        async def fetch_document():
-            msg = None
-            try:
-                msg = await telethon_bot.get_messages(ch_peer, ids=target_msg_id)
-            except Exception as e:
-                print(f"Primary peer fetch error: {e}", flush=True)
-
-            if not (msg and msg.media and hasattr(msg.media, 'document') and msg.media.document):
-                try:
-                    msg = await telethon_bot.get_messages(alt_peer, ids=target_msg_id)
-                except Exception as e:
-                    print(f"Alt peer fetch error: {e}", flush=True)
-
-            if msg and msg.media and hasattr(msg.media, 'document') and msg.media.document:
-                doc = msg.media.document
-                return doc, doc.size, doc.mime_type or "video/mp4"
-            return None, 0, "video/mp4"
-
-        try:
-            fut = asyncio.run_coroutine_threadsafe(fetch_document(), BOT_ASYNC_LOOP)
-            doc, file_size, mime_type = fut.result(timeout=15)
-        except Exception as e:
-            self.send_response(500)
-            self.send_cors_headers()
-            self.end_headers()
-            self.wfile.write(f'{{"error": "Telegram fetch error: {str(e)}"}}'.encode('utf-8'))
             return
 
         if not doc or file_size <= 0:
@@ -194,43 +267,43 @@ class HealthHandler(BaseHTTPRequestHandler):
             self.wfile.write(b'{"error": "Storage document missing"}')
             return
 
-        # Parse HTTP Range header (streaming chunks)
+        # Parse HTTP Range header with full RFC 7233 support
         range_header = self.headers.get('Range')
-        WINDOW_SIZE = 2 * 1024 * 1024  # 2MB window per request
+        start, end, is_range_request = parse_byte_range(range_header, file_size)
 
-        if range_header:
-            import re
-            m = re.match(r'bytes=(\d+)-(\d*)', range_header.strip())
-            if m:
-                start = int(m.group(1))
-                requested_end = int(m.group(2)) if m.group(2) else None
-                if requested_end is not None:
-                    end = min(requested_end, file_size - 1)
-                else:
-                    end = min(start + WINDOW_SIZE - 1, file_size - 1)
-            else:
-                start = 0
-                end = min(WINDOW_SIZE - 1, file_size - 1)
-        else:
-            start = 0
-            end = min(WINDOW_SIZE - 1, file_size - 1)
+        if start >= file_size or start > end:
+            self.send_response(416)  # Range Not Satisfiable
+            self.send_header('Content-Range', f'bytes */{file_size}')
+            self.send_header('Accept-Ranges', 'bytes')
+            self.send_cors_headers()
+            self.end_headers()
+            return
 
-        end = max(start, min(end, file_size - 1))
         content_length = end - start + 1
 
-        self.send_response(206)  # 206 Partial Content for video streams
+        # High-speed HTTP 206 Partial Content / 200 OK headers
+        self.send_response(206 if is_range_request else 200)
         self.send_header('Content-Type', mime_type or 'video/mp4')
-        self.send_header('Content-Range', f'bytes {start}-{end}/{file_size}')
+        if is_range_request:
+            self.send_header('Content-Range', f'bytes {start}-{end}/{file_size}')
         self.send_header('Content-Length', str(content_length))
         self.send_header('Accept-Ranges', 'bytes')
-        self.send_header('Cache-Control', 'no-cache')
+        self.send_header('Cache-Control', 'public, max-age=3600, no-transform')
+        self.send_header('Connection', 'keep-alive')
+        self.send_header('Keep-Alive', 'timeout=60, max=100')
         self.send_cors_headers()
         self.end_headers()
 
-        CHUNK_SIZE = 131072  # 128 KB per Telegram MTProto part
+        # MTProto optimal chunk size (512 KB per RPC)
+        CHUNK_SIZE = 524288
         num_chunks = max(1, (content_length + CHUNK_SIZE - 1) // CHUNK_SIZE)
 
-        chunk_q = queue.Queue(maxsize=16)
+        # Dynamic chunk pipelining queue:
+        # Pre-allocates burst window (up to 32 chunks = 16MB) to keep forward buffer healthy
+        # so mobile players and high-latency connections never experience starvation/buffering.
+        PREFETCH_CHUNKS = 32
+        chunk_q = queue.Queue(maxsize=PREFETCH_CHUNKS)
+        stop_event = threading.Event()
 
         async def fetch_chunks():
             try:
@@ -240,37 +313,91 @@ class HealthHandler(BaseHTTPRequestHandler):
                     offset=start,
                     limit=num_chunks,
                     chunk_size=CHUNK_SIZE,
-                    request_size=CHUNK_SIZE
+                    request_size=524288
                 ):
+                    if stop_event.is_set():
+                        break
                     if not chunk:
                         continue
+
                     needed = content_length - bytes_yielded
                     if needed <= 0:
                         break
-                    to_send = chunk[:needed]
-                    chunk_q.put(to_send)
+
+                    to_send = chunk[:needed] if len(chunk) > needed else chunk
+
+                    # Non-blocking async queue insertion:
+                    # Yields back to BOT_ASYNC_LOOP when queue is full so other tasks are NEVER blocked.
+                    while not stop_event.is_set():
+                        try:
+                            chunk_q.put_nowait(to_send)
+                            break
+                        except queue.Full:
+                            await asyncio.sleep(0.01)
+
                     bytes_yielded += len(to_send)
                     if bytes_yielded >= content_length:
                         break
+            except asyncio.CancelledError:
+                pass
             except Exception as err:
                 print(f"Telethon iter_download streaming error: {err}", flush=True)
-                chunk_q.put(err)
+                while not stop_event.is_set():
+                    try:
+                        chunk_q.put_nowait(err)
+                        break
+                    except queue.Full:
+                        await asyncio.sleep(0.01)
             finally:
-                chunk_q.put(None)
+                while not stop_event.is_set():
+                    try:
+                        chunk_q.put_nowait(None)
+                        break
+                    except queue.Full:
+                        try:
+                            chunk_q.get_nowait()
+                        except queue.Empty:
+                            pass
+                        await asyncio.sleep(0.01)
 
-        asyncio.run_coroutine_threadsafe(fetch_chunks(), BOT_ASYNC_LOOP)
+        fetch_fut = asyncio.run_coroutine_threadsafe(fetch_chunks(), BOT_ASYNC_LOOP)
+
+        # Optimize TCP socket for instant chunk dispatch
+        try:
+            self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except Exception:
+            pass
 
         try:
-            while True:
-                item = chunk_q.get(timeout=25)
+            while not stop_event.is_set():
+                try:
+                    item = chunk_q.get(timeout=25)
+                except queue.Empty:
+                    if fetch_fut.done():
+                        break
+                    continue
+
                 if item is None:
                     break
                 if isinstance(item, Exception):
                     break
+
                 self.wfile.write(item)
                 self.wfile.flush()
-        except Exception:
+        except (ConnectionResetError, BrokenPipeError, socket.error):
+            # Client disconnected or seeked to new position (standard player behavior)
             pass
+        except Exception as e:
+            print(f"Streaming write error: {e}", flush=True)
+        finally:
+            stop_event.set()
+            if not fetch_fut.done():
+                fetch_fut.cancel()
+            while not chunk_q.empty():
+                try:
+                    chunk_q.get_nowait()
+                except queue.Empty:
+                    break
         return
 
     def do_GET(self):
@@ -516,13 +643,23 @@ class HealthHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b'{"status":"online","service":"telegram_movie_bot","miniapp":"/app"}')
 
+    def handle(self):
+        try:
+            super().handle()
+        except (ConnectionResetError, BrokenPipeError, socket.error):
+            pass
+
     def log_message(self, format, *args):
         return  # suppress verbose access logs
 
+class StreamingHTTPServer(ThreadingHTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
 def start_http_server():
     port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(('0.0.0.0', port), HealthHandler)
-    print(f"HTTP Server listening on 0.0.0.0:{port} (/status, /logs)...")
+    server = StreamingHTTPServer(('0.0.0.0', port), HealthHandler)
+    print(f"Threading HTTP Server listening on 0.0.0.0:{port} (/status, /logs, /api/stream)...")
     server.serve_forever()
 
 def keep_alive_watchdog():
