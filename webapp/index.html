@@ -1,0 +1,1086 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>سينما جيت | CinemaJet - مكتبة الأفلام السينمائية</title>
+  
+  <!-- Telegram WebApp SDK -->
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+
+  <!-- Google Fonts: Tajawal & Readex Pro for premium Arabic typography -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Readex+Pro:wght@400;500;600;700;800&family=Tajawal:wght@400;500;700;800;900&display=swap" rel="stylesheet">
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            tajawal: ['Tajawal', 'sans-serif'],
+            readex: ['Readex Pro', 'sans-serif'],
+          },
+          colors: {
+            brand: {
+              red: '#e11d48',
+              crimson: '#be123c',
+              indigo: '#6366f1',
+              dark: '#09090b',
+              surface: '#121216',
+              card: '#18181f',
+              border: '#272732',
+              muted: '#71717a'
+            }
+          },
+          boxShadow: {
+            'glow-red': '0 0 25px -5px rgba(225, 29, 72, 0.4)',
+            'glow-indigo': '0 0 25px -5px rgba(99, 102, 241, 0.4)',
+            'glow-card': '0 10px 30px -10px rgba(0, 0, 0, 0.8)',
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <style>
+    body {
+      font-family: 'Tajawal', sans-serif;
+      background-color: #09090b;
+      color: #f4f4f5;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+      overflow-x: hidden;
+    }
+    
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar {
+      width: 4px;
+      height: 4px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #09090b;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #272732;
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #e11d48;
+    }
+
+    /* Shimmer Skeleton Animation */
+    @keyframes shimmer {
+      0% { background-position: -200% 0; }
+      100% { background-position: 200% 0; }
+    }
+    .skeleton {
+      background: linear-gradient(90deg, #18181f 25%, #272732 50%, #18181f 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.5s infinite;
+    }
+
+    .no-scrollbar::-webkit-scrollbar {
+      display: none;
+    }
+    .no-scrollbar {
+      -ms-overflow-style: none;
+      scrollbar-width: none;
+    }
+
+    /* Glass Effect */
+    .glass-nav {
+      background: rgba(9, 9, 11, 0.82);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+    }
+    .glass-card {
+      background: rgba(24, 24, 31, 0.65);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    /* Gradient Text */
+    .text-gradient-brand {
+      background: linear-gradient(135deg, #fb7185 0%, #e11d48 50%, #818cf8 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+  </style>
+</head>
+<body class="min-h-screen bg-brand-dark pb-24 text-zinc-100 antialiased selection:bg-rose-500 selection:text-white">
+
+  <!-- Ambient Top Glow Background -->
+  <div class="pointer-events-none fixed top-0 left-1/2 -translate-x-1/2 w-full max-w-4xl h-96 bg-gradient-to-b from-rose-600/15 via-indigo-600/10 to-transparent blur-3xl -z-10"></div>
+
+  <!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+  <!-- 1. TOP HEADER & BRAND -->
+  <!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+  <header class="glass-nav sticky top-0 z-40 border-b border-white/5 px-4 py-3 transition-all">
+    <div class="mx-auto flex max-w-6xl items-center justify-between gap-3">
+      
+      <!-- Brand Logo -->
+      <div class="flex items-center gap-2.5 cursor-pointer" onclick="switchTab('home')">
+        <div class="relative flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-tr from-rose-600 via-rose-500 to-indigo-600 shadow-glow-red">
+          <i data-lucide="clapperboard" class="h-5 w-5 text-white"></i>
+          <span class="absolute -bottom-1 -right-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-emerald-500 ring-2 ring-brand-dark">
+            <span class="h-1.5 w-1.5 rounded-full bg-white animate-pulse"></span>
+          </span>
+        </div>
+        <div>
+          <div class="flex items-center gap-1.5">
+            <span class="font-readex text-lg font-bold tracking-tight text-white">CINEMA<span class="text-rose-500">JET</span></span>
+            <span class="rounded bg-rose-500/20 px-1.5 py-0.5 font-readex text-[10px] font-semibold text-rose-400">PRO</span>
+          </div>
+          <p class="text-[11px] font-medium text-zinc-400">مكتبة الأفلام السينمائية</p>
+        </div>
+      </div>
+
+      <!-- Quick Action Buttons -->
+      <div class="flex items-center gap-2">
+        <!-- Store Link Button -->
+        <a href="https://t.me/NitroJet3BOT" target="_blank" onclick="hapticTap()" class="flex items-center gap-1.5 rounded-xl border border-white/10 bg-zinc-900/80 px-2.5 py-1.5 text-xs font-semibold text-zinc-200 transition hover:border-rose-500/40 hover:bg-zinc-800">
+          <i data-lucide="shopping-bag" class="h-3.5 w-3.5 text-rose-400"></i>
+          <span class="hidden sm:inline">متجر البوت</span>
+        </a>
+
+        <!-- Bot Chat Direct Link -->
+        <button onclick="openTelegramBot()" class="flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-rose-600 to-indigo-600 px-3 py-1.5 text-xs font-bold text-white shadow-glow-red transition active:scale-95">
+          <i data-lucide="send" class="h-3.5 w-3.5"></i>
+          <span>البوت الرئيسي</span>
+        </button>
+      </div>
+
+    </div>
+  </header>
+
+  <!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+  <!-- 2. SEARCH & LIVE FILTERS -->
+  <!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+  <section class="mx-auto max-w-6xl px-4 pt-4">
+    <!-- Search Bar Input -->
+    <div class="relative">
+      <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3.5 text-zinc-400">
+        <i data-lucide="search" class="h-5 w-5"></i>
+      </div>
+      <input 
+        type="text" 
+        id="searchInput" 
+        placeholder="ابحث عن فيلم، ممثل، أو كلمة مفتاحية..."
+        class="w-full rounded-2xl border border-white/10 bg-zinc-900/90 py-3 pr-11 pl-10 text-sm font-medium text-white placeholder-zinc-500 shadow-inner outline-none transition focus:border-rose-500 focus:ring-2 focus:ring-rose-500/20"
+        oninput="handleSearchInput(event)"
+      >
+      <!-- Clear Button -->
+      <button 
+        id="clearSearchBtn" 
+        onclick="clearSearch()" 
+        class="absolute inset-y-0 left-0 hidden items-center pl-3 text-zinc-400 hover:text-white"
+      >
+        <i data-lucide="x" class="h-4 w-4"></i>
+      </button>
+    </div>
+
+    <!-- Active Search Filter Summary -->
+    <div id="searchMetaBar" class="mt-2.5 flex items-center justify-between text-xs text-zinc-400">
+      <span id="moviesCountBadge" class="flex items-center gap-1.5">
+        <span class="h-2 w-2 rounded-full bg-emerald-500"></span>
+        <span id="moviesCountText">جاري تحميل الأفلام...</span>
+      </span>
+
+      <!-- Sort Dropdown Pills -->
+      <div class="flex items-center gap-1">
+        <button onclick="setSortMode('featured')" id="sort-featured" class="sort-btn rounded-lg bg-rose-600 px-2 py-1 text-[11px] font-bold text-white transition">المميزة</button>
+        <button onclick="setSortMode('rating')" id="sort-rating" class="sort-btn rounded-lg bg-zinc-800 px-2 py-1 text-[11px] font-medium text-zinc-400 transition hover:text-white">الأعلى تقييماً</button>
+        <button onclick="setSortMode('newest')" id="sort-newest" class="sort-btn rounded-lg bg-zinc-800 px-2 py-1 text-[11px] font-medium text-zinc-400 transition hover:text-white">الأحدث</button>
+      </div>
+    </div>
+
+    <!-- Genre Filter Pills Carousel -->
+    <div class="no-scrollbar mt-3 flex items-center gap-2 overflow-x-auto py-1">
+      <button onclick="setGenreFilter('الكل')" class="genre-pill shrink-0 rounded-xl border border-rose-500/40 bg-rose-600 px-3.5 py-1.5 text-xs font-bold text-white shadow-glow-red transition active:scale-95" data-genre="الكل">
+        الكل
+      </button>
+      <button onclick="setGenreFilter('أكشن')" class="genre-pill shrink-0 rounded-xl border border-white/5 bg-zinc-900 px-3.5 py-1.5 text-xs font-medium text-zinc-300 transition hover:border-white/20 active:scale-95" data-genre="أكشن">
+        أكشن 💥
+      </button>
+      <button onclick="setGenreFilter('دراما')" class="genre-pill shrink-0 rounded-xl border border-white/5 bg-zinc-900 px-3.5 py-1.5 text-xs font-medium text-zinc-300 transition hover:border-white/20 active:scale-95" data-genre="دراما">
+        دراما 🎭
+      </button>
+      <button onclick="setGenreFilter('كوميديا')" class="genre-pill shrink-0 rounded-xl border border-white/5 bg-zinc-900 px-3.5 py-1.5 text-xs font-medium text-zinc-300 transition hover:border-white/20 active:scale-95" data-genre="كوميديا">
+        كوميديا 😂
+      </button>
+      <button onclick="setGenreFilter('خيال علمي')" class="genre-pill shrink-0 rounded-xl border border-white/5 bg-zinc-900 px-3.5 py-1.5 text-xs font-medium text-zinc-300 transition hover:border-white/20 active:scale-95" data-genre="خيال علمي">
+        خيال علمي 🚀
+      </button>
+      <button onclick="setGenreFilter('رعب')" class="genre-pill shrink-0 rounded-xl border border-white/5 bg-zinc-900 px-3.5 py-1.5 text-xs font-medium text-zinc-300 transition hover:border-white/20 active:scale-95" data-genre="رعب">
+        رعب 👻
+      </button>
+      <button onclick="setGenreFilter('إثارة')" class="genre-pill shrink-0 rounded-xl border border-white/5 bg-zinc-900 px-3.5 py-1.5 text-xs font-medium text-zinc-300 transition hover:border-white/20 active:scale-95" data-genre="إثارة">
+        إثارة 🔥
+      </button>
+      <button onclick="setGenreFilter('مغامرة')" class="genre-pill shrink-0 rounded-xl border border-white/5 bg-zinc-900 px-3.5 py-1.5 text-xs font-medium text-zinc-300 transition hover:border-white/20 active:scale-95" data-genre="مغامرة">
+        مغامرة 🏹
+      </button>
+      <button onclick="setGenreFilter('رسوم متحركة')" class="genre-pill shrink-0 rounded-xl border border-white/5 bg-zinc-900 px-3.5 py-1.5 text-xs font-medium text-zinc-300 transition hover:border-white/20 active:scale-95" data-genre="رسوم متحركة">
+        أنيميشن 🎨
+      </button>
+      <button onclick="setGenreFilter('جريمة')" class="genre-pill shrink-0 rounded-xl border border-white/5 bg-zinc-900 px-3.5 py-1.5 text-xs font-medium text-zinc-300 transition hover:border-white/20 active:scale-95" data-genre="جريمة">
+        جريمة 🕵️‍♂️
+      </button>
+      <button onclick="setGenreFilter('عائلي')" class="genre-pill shrink-0 rounded-xl border border-white/5 bg-zinc-900 px-3.5 py-1.5 text-xs font-medium text-zinc-300 transition hover:border-white/20 active:scale-95" data-genre="عائلي">
+        عائلي 👨‍👩‍👧
+      </button>
+    </div>
+  </section>
+
+  <!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+  <!-- 3. HERO FEATURED CAROUSEL SECTION -->
+  <!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+  <section id="heroSection" class="mx-auto mt-4 max-w-6xl px-4">
+    <div id="heroCarouselWrapper" class="relative overflow-hidden rounded-3xl border border-white/10 bg-zinc-950 shadow-glow-card">
+      
+      <!-- Slide Content Container -->
+      <div id="heroSlideContainer" class="relative h-[340px] sm:h-[400px] w-full">
+        <!-- Rendered via JS -->
+        <div class="skeleton h-full w-full"></div>
+      </div>
+
+      <!-- Slide Indicator Dots -->
+      <div id="heroDots" class="absolute bottom-3.5 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5"></div>
+    </div>
+  </section>
+
+  <!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+  <!-- 4. MOVIES EXPLORER GRID -->
+  <!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+  <main class="mx-auto mt-6 max-w-6xl px-4">
+    <!-- Section Title -->
+    <div class="mb-3 flex items-center justify-between">
+      <div class="flex items-center gap-2">
+        <div class="h-5 w-1.5 rounded-full bg-rose-500"></div>
+        <h2 id="gridSectionTitle" class="font-readex text-base font-bold text-white sm:text-lg">أحدث وأقوى الأفلام</h2>
+      </div>
+      <span id="gridCategoryIndicator" class="text-xs font-medium text-rose-400">الكل</span>
+    </div>
+
+    <!-- Movies Grid Container -->
+    <div id="moviesGrid" class="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 sm:gap-4">
+      <!-- Skeletons initially loaded -->
+      <div class="skeleton aspect-[2/3] rounded-2xl"></div>
+      <div class="skeleton aspect-[2/3] rounded-2xl"></div>
+      <div class="skeleton aspect-[2/3] rounded-2xl"></div>
+      <div class="skeleton aspect-[2/3] rounded-2xl"></div>
+      <div class="skeleton aspect-[2/3] rounded-2xl"></div>
+      <div class="skeleton aspect-[2/3] rounded-2xl"></div>
+    </div>
+
+    <!-- Empty State -->
+    <div id="emptyState" class="hidden flex-col items-center justify-center py-16 text-center">
+      <div class="flex h-16 w-16 items-center justify-center rounded-2xl bg-zinc-900 text-zinc-500">
+        <i data-lucide="film" class="h-8 w-8"></i>
+      </div>
+      <h3 class="mt-4 text-base font-bold text-white">لم يتم العثور على أفلام</h3>
+      <p class="mt-1 text-xs text-zinc-400">جرّب البحث بكلمة أخرى أو اختر تصنيفاً مختلفاً</p>
+      <button onclick="resetFilters()" class="mt-4 rounded-xl bg-zinc-800 px-4 py-2 text-xs font-semibold text-rose-400 hover:bg-zinc-700">
+        إعادة تعيين الفلاتر
+      </button>
+    </div>
+
+    <!-- Infinite Scroll Loading Trigger -->
+    <div id="infiniteLoading" class="mt-8 flex justify-center py-4">
+      <div class="flex items-center gap-2 text-xs text-zinc-400">
+        <span class="h-4 w-4 animate-spin rounded-full border-2 border-rose-500 border-t-transparent"></span>
+        <span>جاري تحميل المزيد من الأفلام...</span>
+      </div>
+    </div>
+
+    <!-- End of Catalog Message -->
+    <div id="endOfCatalog" class="mt-8 hidden text-center text-xs text-zinc-500 py-4">
+      ✨ تم عرض كافة الأفلام المتوفرة في المكتبة بنجاح
+    </div>
+  </main>
+
+  <!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+  <!-- 5. MOVIE DETAILS DRAWER / MODAL -->
+  <!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+  <div id="movieModal" class="fixed inset-0 z-50 hidden items-end sm:items-center justify-center p-0 sm:p-4">
+    <!-- Backdrop Blur Overlay -->
+    <div class="fixed inset-0 bg-black/85 backdrop-blur-md transition-opacity" onclick="closeMovieModal()"></div>
+
+    <!-- Modal Content Card -->
+    <div class="relative max-h-[90vh] sm:max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-t-3xl sm:rounded-3xl border border-white/10 bg-brand-surface text-zinc-100 shadow-2xl transition-all">
+      
+      <!-- Close Button -->
+      <button onclick="closeMovieModal()" class="absolute top-4 left-4 z-30 flex h-9 w-9 items-center justify-center rounded-full bg-black/60 text-white backdrop-blur-md transition hover:bg-rose-600">
+        <i data-lucide="x" class="h-5 w-5"></i>
+      </button>
+
+      <!-- Backdrop Header Image -->
+      <div class="relative h-56 sm:h-72 w-full overflow-hidden bg-zinc-950">
+        <img id="modalBackdrop" src="" alt="Backdrop" class="h-full w-full object-cover object-center opacity-85">
+        <div class="absolute inset-0 bg-gradient-to-t from-brand-surface via-brand-surface/60 to-transparent"></div>
+        
+        <!-- Floating Poster Over Backdrop -->
+        <div class="absolute bottom-4 right-4 flex items-end gap-3.5">
+          <div class="relative h-28 w-20 sm:h-36 sm:w-24 shrink-0 overflow-hidden rounded-xl border-2 border-white/15 bg-zinc-900 shadow-2xl">
+            <img id="modalPoster" src="" alt="Poster" class="h-full w-full object-cover">
+          </div>
+          <div class="pb-1">
+            <div class="flex items-center gap-1.5">
+              <span id="modalQualityBadge" class="rounded bg-rose-600 px-2 py-0.5 font-readex text-[10px] font-bold text-white uppercase">1080p</span>
+              <span id="modalYearBadge" class="rounded bg-white/10 px-2 py-0.5 font-readex text-[10px] font-semibold text-zinc-300">2024</span>
+              <span id="modalRatingBadge" class="flex items-center gap-1 rounded bg-amber-500/20 px-2 py-0.5 font-readex text-[10px] font-bold text-amber-300">
+                <i data-lucide="star" class="h-3 w-3 fill-amber-400 text-amber-400"></i>
+                <span id="modalRatingVal">8.5</span>
+              </span>
+            </div>
+            <h1 id="modalTitle" class="mt-1.5 font-readex text-lg sm:text-xl font-extrabold text-white leading-tight">اسم الفيلم</h1>
+            <p id="modalArabicTitle" class="text-xs font-semibold text-rose-400 mt-0.5"></p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Modal Body Content -->
+      <div class="p-5 pt-3">
+        
+        <!-- Quick Meta Details Bar -->
+        <div class="flex flex-wrap items-center gap-3 border-b border-white/5 pb-4 text-xs text-zinc-400">
+          <div class="flex items-center gap-1.5">
+            <i data-lucide="clock" class="h-3.5 w-3.5 text-zinc-500"></i>
+            <span id="modalDuration">1h 55m</span>
+          </div>
+          <span class="text-zinc-600">•</span>
+          <div class="flex items-center gap-1.5">
+            <i data-lucide="hard-drive" class="h-3.5 w-3.5 text-zinc-500"></i>
+            <span id="modalSize">1.2 GB</span>
+          </div>
+          <span class="text-zinc-600">•</span>
+          <div class="flex items-center gap-1.5">
+            <i data-lucide="shield-check" class="h-3.5 w-3.5 text-emerald-400"></i>
+            <span>متحقق في القناة</span>
+          </div>
+        </div>
+
+        <!-- Genres Chips -->
+        <div class="mt-3.5 flex flex-wrap gap-1.5" id="modalGenresList">
+          <!-- Rendered via JS -->
+        </div>
+
+        <!-- Story Synopsis Description -->
+        <div class="mt-4">
+          <h4 class="text-xs font-bold text-zinc-400 uppercase tracking-wider">قصة الفيلم</h4>
+          <p id="modalDescription" class="mt-1.5 text-sm font-normal text-zinc-300 leading-relaxed">
+            وصف وقصة الفيلم الكاملة...
+          </p>
+        </div>
+
+        <!-- Primary Action Buttons -->
+        <div class="mt-6 flex flex-col sm:flex-row items-center gap-2.5">
+          <!-- Watch/Deliver in Bot Button -->
+          <button id="modalDeliverBtn" onclick="deliverMovieFromModal()" class="w-full sm:flex-1 flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-rose-600 via-rose-500 to-indigo-600 py-3.5 px-6 font-readex text-sm font-bold text-white shadow-glow-red transition active:scale-95 hover:brightness-110">
+            <i data-lucide="play" class="h-4 w-4 fill-white"></i>
+            <span>مشاهدة وتحميل في البوت</span>
+          </button>
+
+          <!-- Favorite & Share Buttons -->
+          <div class="flex w-full sm:w-auto items-center gap-2">
+            <button id="modalFavBtn" onclick="toggleFavoriteFromModal()" class="flex-1 sm:flex-none flex items-center justify-center gap-1.5 rounded-2xl border border-white/10 bg-zinc-900 py-3.5 px-4 text-xs font-semibold text-zinc-300 transition hover:bg-zinc-800">
+              <i data-lucide="heart" class="h-4 w-4 text-rose-500"></i>
+              <span id="modalFavBtnText">المفضلة</span>
+            </button>
+
+            <button onclick="shareMovieFromModal()" class="flex-1 sm:flex-none flex items-center justify-center gap-1.5 rounded-2xl border border-white/10 bg-zinc-900 py-3.5 px-4 text-xs font-semibold text-zinc-300 transition hover:bg-zinc-800">
+              <i data-lucide="share-2" class="h-4 w-4 text-indigo-400"></i>
+              <span>مشاركة</span>
+            </button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+  <!-- 6. BOTTOM NAVIGATION BAR -->
+  <!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+  <nav class="glass-nav fixed bottom-0 left-0 right-0 z-40 border-t border-white/10 px-4 py-2 pb-safe">
+    <div class="mx-auto flex max-w-md items-center justify-around text-center">
+      
+      <!-- Home Tab -->
+      <button onclick="switchTab('home')" id="tab-home" class="nav-tab flex flex-col items-center gap-1 text-rose-500 transition">
+        <i data-lucide="film" class="h-5 w-5"></i>
+        <span class="text-[10px] font-bold">الأفلام</span>
+      </button>
+
+      <!-- Top Rated Tab -->
+      <button onclick="switchTab('top')" id="tab-top" class="nav-tab flex flex-col items-center gap-1 text-zinc-400 transition hover:text-white">
+        <i data-lucide="star" class="h-5 w-5"></i>
+        <span class="text-[10px] font-medium">الأعلى تقييماً</span>
+      </button>
+
+      <!-- Watchlist / Favorites Tab -->
+      <button onclick="switchTab('favorites')" id="tab-favorites" class="nav-tab relative flex flex-col items-center gap-1 text-zinc-400 transition hover:text-white">
+        <i data-lucide="heart" class="h-5 w-5"></i>
+        <span class="text-[10px] font-medium">المفضلة</span>
+        <span id="favCountBadge" class="absolute -top-1 -right-1 hidden h-4 w-4 items-center justify-center rounded-full bg-rose-600 font-readex text-[9px] font-bold text-white">0</span>
+      </button>
+
+      <!-- About / Store Tab -->
+      <button onclick="switchTab('about')" id="tab-about" class="nav-tab flex flex-col items-center gap-1 text-zinc-400 transition hover:text-white">
+        <i data-lucide="info" class="h-5 w-5"></i>
+        <span class="text-[10px] font-medium">عن التطبيق</span>
+      </button>
+
+    </div>
+  </nav>
+
+  <!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+  <!-- 7. APPLICATION SCRIPT (REACTIVE SPA ENGINE) -->
+  <!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+  <script>
+    // Global State
+    const state = {
+      movies: [],
+      featured: [],
+      page: 1,
+      limit: 24,
+      total: 0,
+      totalPages: 1,
+      hasMore: true,
+      isLoading: false,
+      searchQuery: '',
+      activeGenre: 'الكل',
+      sortMode: 'featured',
+      activeTab: 'home',
+      currentModalMovie: null,
+      favorites: JSON.parse(localStorage.getItem('cinema_favorites') || '[]')
+    };
+
+    // Initialize Telegram WebApp API
+    const tg = window.Telegram?.WebApp;
+    if (tg) {
+      try {
+        tg.ready();
+        tg.expand();
+        tg.setHeaderColor('#09090b');
+        tg.setBackgroundColor('#09090b');
+        if (tg.enableClosingConfirmation) {
+          tg.enableClosingConfirmation();
+        }
+      } catch (e) {
+        console.warn("Telegram WebApp initialization error:", e);
+      }
+    }
+
+    // Haptic Feedback Helper
+    function hapticTap(type = 'light') {
+      try {
+        if (tg?.HapticFeedback) {
+          tg.HapticFeedback.impactOccurred(type);
+        }
+      } catch (e) {}
+    }
+
+    // DOM Ready Initialization
+    document.addEventListener('DOMContentLoaded', () => {
+      lucide.createIcons();
+      updateFavBadge();
+      loadFeaturedMovies();
+      loadMovies(true);
+      setupInfiniteScroll();
+    });
+
+    // 1. Fetch Featured Carousel Movies
+    async function loadFeaturedMovies() {
+      try {
+        const res = await fetch('/api/featured?limit=6');
+        const data = await res.json();
+        if (data.status === 'success' && data.items.length > 0) {
+          state.featured = data.items;
+          renderHeroCarousel();
+        }
+      } catch (e) {
+        console.error("Error fetching featured movies:", e);
+      }
+    }
+
+    // Render Hero Carousel
+    let currentHeroIndex = 0;
+    let heroInterval = null;
+
+    function renderHeroCarousel() {
+      const container = document.getElementById('heroSlideContainer');
+      const dotsContainer = document.getElementById('heroDots');
+      if (!container || state.featured.length === 0) return;
+
+      container.innerHTML = state.featured.map((m, idx) => {
+        const bgImg = m.backdrop_url || m.poster_url || '';
+        const posterImg = m.poster_url || m.backdrop_url || '';
+        const rating = m.rating ? `★ ${m.rating}` : 'مميز';
+        const displayTitle = m.arabic_title || m.title;
+
+        return `
+          <div id="hero-slide-${idx}" class="hero-slide absolute inset-0 transition-opacity duration-700 ${idx === 0 ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}">
+            <!-- Background Backdrop Image with Gradient Overlay -->
+            <img src="${bgImg}" alt="${displayTitle}" class="h-full w-full object-cover object-center filter brightness-90">
+            <div class="absolute inset-0 bg-gradient-to-t from-brand-dark via-brand-dark/70 to-transparent"></div>
+            <div class="absolute inset-0 bg-gradient-to-r from-brand-dark/90 via-brand-dark/40 to-transparent"></div>
+
+            <!-- Slide Content Info -->
+            <div class="absolute bottom-6 right-6 left-6 z-20 flex flex-col justify-end max-w-xl">
+              <div class="flex items-center gap-2">
+                <span class="rounded-md bg-rose-600 px-2 py-0.5 font-readex text-[10px] font-extrabold text-white shadow-glow-red">اختيار الأسبوع 🔥</span>
+                <span class="flex items-center gap-1 rounded-md bg-amber-500/20 px-2 py-0.5 font-readex text-[10px] font-bold text-amber-300">
+                  <i data-lucide="star" class="h-3 w-3 fill-amber-400 text-amber-400"></i>
+                  ${rating}
+                </span>
+                <span class="rounded-md bg-white/10 px-2 py-0.5 font-readex text-[10px] font-bold text-zinc-300">${m.quality || '1080p'}</span>
+                ${m.release_year ? `<span class="text-xs text-zinc-400">${m.release_year}</span>` : ''}
+              </div>
+
+              <h2 class="mt-2 font-readex text-xl sm:text-2xl font-extrabold text-white leading-tight">${displayTitle}</h2>
+              <p class="mt-1 line-clamp-2 text-xs text-zinc-300 leading-relaxed">${m.description || 'فيلم سينمائي مميز متوفر بجودة عالية للمشاهدة والتحميل المباشر.'}</p>
+
+              <!-- Hero Action Buttons -->
+              <div class="mt-3.5 flex items-center gap-2.5">
+                <button onclick="deliverMovieById(${m.id})" class="flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-rose-600 to-indigo-600 px-4 py-2 font-readex text-xs font-bold text-white shadow-glow-red transition active:scale-95 hover:brightness-110">
+                  <i data-lucide="play" class="h-3.5 w-3.5 fill-white"></i>
+                  <span>مشاهدة الآن</span>
+                </button>
+
+                <button onclick="openMovieDetails(${m.id})" class="flex items-center gap-1.5 rounded-xl border border-white/20 bg-zinc-900/80 px-3.5 py-2 font-readex text-xs font-semibold text-zinc-200 transition hover:bg-zinc-800">
+                  <i data-lucide="info" class="h-3.5 w-3.5"></i>
+                  <span>التفاصيل</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      // Dots
+      dotsContainer.innerHTML = state.featured.map((_, idx) => `
+        <button onclick="goToHeroSlide(${idx})" class="h-1.5 rounded-full transition-all duration-300 ${idx === 0 ? 'w-6 bg-rose-500' : 'w-2 bg-white/30'}"></button>
+      `).join('');
+
+      lucide.createIcons();
+
+      // Auto cycle slides
+      if (heroInterval) clearInterval(heroInterval);
+      heroInterval = setInterval(() => {
+        if (state.featured.length > 1) {
+          goToHeroSlide((currentHeroIndex + 1) % state.featured.length);
+        }
+      }, 6000);
+    }
+
+    function goToHeroSlide(idx) {
+      if (idx === currentHeroIndex || !state.featured[idx]) return;
+      
+      const prevSlide = document.getElementById(`hero-slide-${currentHeroIndex}`);
+      const nextSlide = document.getElementById(`hero-slide-${idx}`);
+      if (prevSlide && nextSlide) {
+        prevSlide.classList.remove('opacity-100', 'z-10');
+        prevSlide.classList.add('opacity-0', 'z-0', 'pointer-events-none');
+        
+        nextSlide.classList.remove('opacity-0', 'z-0', 'pointer-events-none');
+        nextSlide.classList.add('opacity-100', 'z-10');
+      }
+
+      currentHeroIndex = idx;
+      const dots = document.getElementById('heroDots')?.children;
+      if (dots) {
+        for (let i = 0; i < dots.length; i++) {
+          dots[i].className = `h-1.5 rounded-full transition-all duration-300 ${i === idx ? 'w-6 bg-rose-500' : 'w-2 bg-white/30'}`;
+        }
+      }
+    }
+
+    // 2. Load Paginated Movies Grid
+    async function loadMovies(reset = false) {
+      if (state.isLoading) return;
+      if (reset) {
+        state.page = 1;
+        state.movies = [];
+        state.hasMore = true;
+      }
+      if (!state.hasMore && !reset) return;
+
+      state.isLoading = true;
+      const loadingEl = document.getElementById('infiniteLoading');
+      if (loadingEl) loadingEl.classList.remove('hidden');
+
+      try {
+        const queryParams = new URLSearchParams({
+          page: state.page,
+          limit: state.limit,
+          sort: state.sortMode
+        });
+        if (state.searchQuery) queryParams.set('query', state.searchQuery);
+        if (state.activeGenre && state.activeGenre !== 'الكل') queryParams.set('genre', state.activeGenre);
+
+        const res = await fetch(`/api/movies?${queryParams.toString()}`);
+        const data = await res.json();
+
+        if (data.status === 'success') {
+          state.total = data.total;
+          state.totalPages = data.total_pages;
+          state.hasMore = data.has_more;
+
+          if (reset) {
+            state.movies = data.items;
+          } else {
+            state.movies = [...state.movies, ...data.items];
+          }
+
+          renderMoviesGrid();
+          updateStatsBadge(data.total);
+          state.page += 1;
+        }
+      } catch (e) {
+        console.error("Error loading movies:", e);
+      } finally {
+        state.isLoading = false;
+        if (loadingEl) loadingEl.classList.add('hidden');
+        
+        const endEl = document.getElementById('endOfCatalog');
+        if (endEl) {
+          if (!state.hasMore && state.movies.length > 0) {
+            endEl.classList.remove('hidden');
+          } else {
+            endEl.classList.add('hidden');
+          }
+        }
+      }
+    }
+
+    // Render Movie Cards Grid
+    function renderMoviesGrid() {
+      const grid = document.getElementById('moviesGrid');
+      const emptyState = document.getElementById('emptyState');
+      if (!grid) return;
+
+      if (state.movies.length === 0) {
+        grid.innerHTML = '';
+        if (emptyState) emptyState.classList.remove('hidden');
+        return;
+      }
+
+      if (emptyState) emptyState.classList.add('hidden');
+
+      grid.innerHTML = state.movies.map(m => {
+        const displayTitle = m.arabic_title || m.title;
+        const posterSrc = m.poster_url || m.backdrop_url || '';
+        const rating = m.rating ? `★ ${m.rating}` : '';
+        const year = m.release_year || '';
+        const quality = m.quality || '1080p';
+        const isFav = state.favorites.includes(m.id);
+
+        // Fallback placeholder card if poster missing
+        const posterEl = posterSrc ? `
+          <img src="${posterSrc}" alt="${displayTitle}" loading="lazy" class="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105" onerror="this.onerror=null;this.parentElement.innerHTML='<div class=\\'flex h-full w-full items-center justify-center bg-zinc-900 p-2 text-center text-xs font-bold text-zinc-500\\'>🎬 ${displayTitle}</div>'">
+        ` : `
+          <div class="flex h-full w-full flex-col items-center justify-center bg-gradient-to-br from-zinc-800 to-zinc-950 p-3 text-center">
+            <i data-lucide="film" class="h-8 w-8 text-rose-500/60 mb-2"></i>
+            <span class="text-xs font-bold text-zinc-300 line-clamp-3">${displayTitle}</span>
+          </div>
+        `;
+
+        return `
+          <div onclick="openMovieDetails(${m.id})" class="group relative flex flex-col cursor-pointer transition active:scale-95">
+            <!-- Poster Aspect Box -->
+            <div class="relative aspect-[2/3] w-full overflow-hidden rounded-2xl border border-white/5 bg-zinc-900 shadow-md transition-all duration-300 group-hover:border-rose-500/50 group-hover:shadow-glow-red">
+              ${posterEl}
+              
+              <!-- Dark Gradient Vignette -->
+              <div class="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent opacity-80 group-hover:opacity-95 transition-opacity"></div>
+
+              <!-- Top Badges -->
+              <div class="absolute top-2 right-2 left-2 flex items-center justify-between">
+                <span class="rounded-md bg-black/70 backdrop-blur-md px-1.5 py-0.5 font-readex text-[10px] font-bold text-white uppercase">${quality}</span>
+                ${rating ? `
+                  <span class="flex items-center gap-0.5 rounded-md bg-amber-500/30 backdrop-blur-md px-1.5 py-0.5 font-readex text-[10px] font-extrabold text-amber-300">
+                    <i data-lucide="star" class="h-2.5 w-2.5 fill-amber-400 text-amber-400"></i>
+                    ${m.rating}
+                  </span>
+                ` : ''}
+              </div>
+
+              <!-- Floating Quick Play Icon on Hover -->
+              <div class="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                <div class="flex h-11 w-11 items-center justify-center rounded-full bg-rose-600/90 text-white shadow-glow-red backdrop-blur-md transform scale-75 group-hover:scale-100 transition-transform">
+                  <i data-lucide="play" class="h-5 w-5 fill-white ml-0.5"></i>
+                </div>
+              </div>
+
+              <!-- Bottom Meta in Poster -->
+              <div class="absolute bottom-2 right-2 left-2">
+                <div class="flex items-center gap-1.5 text-[10px] text-zinc-400 font-medium">
+                  ${year ? `<span>${year}</span>` : ''}
+                  ${m.duration_str ? `<span>• ${m.duration_str}</span>` : ''}
+                </div>
+                <h3 class="mt-0.5 font-readex text-xs font-bold text-white line-clamp-1 group-hover:text-rose-400 transition-colors">${displayTitle}</h3>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      lucide.createIcons();
+    }
+
+    // 3. Search Handler with Debounce
+    let searchTimeout = null;
+    function handleSearchInput(e) {
+      const q = e.target.value.trim();
+      const clearBtn = document.getElementById('clearSearchBtn');
+      if (clearBtn) {
+        if (q) clearBtn.classList.remove('hidden');
+        else clearBtn.classList.add('hidden');
+      }
+
+      if (searchTimeout) clearTimeout(searchTimeout);
+      searchTimeout = setTimeout(() => {
+        state.searchQuery = q;
+        loadMovies(true);
+      }, 300);
+    }
+
+    function clearSearch() {
+      const input = document.getElementById('searchInput');
+      if (input) input.value = '';
+      document.getElementById('clearSearchBtn')?.classList.add('hidden');
+      state.searchQuery = '';
+      loadMovies(true);
+    }
+
+    // 4. Genre Filter Handler
+    function setGenreFilter(genre) {
+      hapticTap();
+      state.activeGenre = genre;
+      
+      // Update UI active state on pills
+      document.querySelectorAll('.genre-pill').forEach(btn => {
+        if (btn.getAttribute('data-genre') === genre) {
+          btn.className = "genre-pill shrink-0 rounded-xl border border-rose-500/40 bg-rose-600 px-3.5 py-1.5 text-xs font-bold text-white shadow-glow-red transition active:scale-95";
+        } else {
+          btn.className = "genre-pill shrink-0 rounded-xl border border-white/5 bg-zinc-900 px-3.5 py-1.5 text-xs font-medium text-zinc-300 transition hover:border-white/20 active:scale-95";
+        }
+      });
+
+      document.getElementById('gridCategoryIndicator').textContent = genre;
+      loadMovies(true);
+    }
+
+    // 5. Sort Mode Handler
+    function setSortMode(mode) {
+      hapticTap();
+      state.sortMode = mode;
+      
+      document.querySelectorAll('.sort-btn').forEach(btn => {
+        btn.className = "sort-btn rounded-lg bg-zinc-800 px-2 py-1 text-[11px] font-medium text-zinc-400 transition hover:text-white";
+      });
+      const activeBtn = document.getElementById(`sort-${mode}`);
+      if (activeBtn) {
+        activeBtn.className = "sort-btn rounded-lg bg-rose-600 px-2 py-1 text-[11px] font-bold text-white transition";
+      }
+
+      loadMovies(true);
+    }
+
+    function resetFilters() {
+      clearSearch();
+      setGenreFilter('الكل');
+      setSortMode('featured');
+    }
+
+    // 6. Infinite Scroll Observer
+    function setupInfiniteScroll() {
+      window.addEventListener('scroll', () => {
+        if ((window.innerHeight + window.scrollY) >= document.body.offsetHeight - 500) {
+          if (!state.isLoading && state.hasMore) {
+            loadMovies(false);
+          }
+        }
+      });
+    }
+
+    function updateStatsBadge(total) {
+      const badge = document.getElementById('moviesCountText');
+      if (badge) {
+        const formatted = new Intl.NumberFormat('ar-EG').format(total);
+        badge.textContent = `${formatted} فيلم متوفر`;
+      }
+    }
+
+    // 7. Movie Details Modal Management
+    async function openMovieDetails(movieId) {
+      hapticTap();
+      const modal = document.getElementById('movieModal');
+      if (!modal) return;
+
+      // Find in existing loaded or fetch
+      let movie = state.movies.find(m => m.id === movieId) || state.featured.find(m => m.id === movieId);
+      if (!movie) {
+        try {
+          const res = await fetch(`/api/movie/${movieId}`);
+          const data = await res.json();
+          if (data.status === 'success') movie = data.movie;
+        } catch (e) {}
+      }
+
+      if (!movie) return;
+      state.currentModalMovie = movie;
+
+      // Populate Modal Fields
+      const backdropSrc = movie.backdrop_url || movie.poster_url || '';
+      const posterSrc = movie.poster_url || movie.backdrop_url || '';
+      const displayTitle = movie.arabic_title || movie.title;
+
+      document.getElementById('modalBackdrop').src = backdropSrc;
+      document.getElementById('modalPoster').src = posterSrc;
+      document.getElementById('modalTitle').textContent = movie.title;
+      document.getElementById('modalArabicTitle').textContent = movie.arabic_title ? `(${movie.arabic_title})` : '';
+      document.getElementById('modalQualityBadge').textContent = movie.quality || '1080p';
+      document.getElementById('modalYearBadge').textContent = movie.release_year || 'HD';
+      document.getElementById('modalRatingVal').textContent = movie.rating || '8.0';
+      document.getElementById('modalDuration').textContent = movie.duration_str || '1h 45m';
+      document.getElementById('modalSize').textContent = movie.size_str || '1.2 GB';
+      document.getElementById('modalDescription').textContent = movie.description || 'فيلم سينمائي مميز، متوفر للمشاهدة والتحميل المباشر بجودة عالية.';
+
+      // Genres chips
+      const genresContainer = document.getElementById('modalGenresList');
+      if (genresContainer) {
+        const genres = Array.isArray(movie.genres) ? movie.genres : (movie.genres ? movie.genres.split(',') : ['أكشن']);
+        genresContainer.innerHTML = genres.map(g => `
+          <span class="rounded-lg border border-white/5 bg-zinc-900/90 px-2.5 py-1 text-[11px] font-semibold text-zinc-300">${g.trim()}</span>
+        `).join('');
+      }
+
+      // Favorite Button State
+      updateModalFavButtonState(movie.id);
+
+      modal.classList.remove('hidden');
+      modal.classList.add('flex');
+      lucide.createIcons();
+    }
+
+    function closeMovieModal() {
+      hapticTap();
+      const modal = document.getElementById('movieModal');
+      if (modal) {
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+      }
+      state.currentModalMovie = null;
+    }
+
+    // Action: Direct Bot Delivery
+    function deliverMovieById(id) {
+      hapticTap('heavy');
+      const startUrl = `https://t.me/zxeeabot?start=movie_${id}`;
+      
+      // If inside Telegram WebApp
+      if (tg?.openTelegramLink) {
+        tg.openTelegramLink(startUrl);
+      } else {
+        window.open(startUrl, '_blank');
+      }
+    }
+
+    function deliverMovieFromModal() {
+      if (state.currentModalMovie) {
+        deliverMovieById(state.currentModalMovie.id);
+      }
+    }
+
+    // Action: Share Movie
+    function shareMovieFromModal() {
+      hapticTap();
+      if (!state.currentModalMovie) return;
+      const m = state.currentModalMovie;
+      const title = m.arabic_title || m.title;
+      const shareUrl = `https://t.me/zxeeabot?start=movie_${m.id}`;
+      const shareText = `🎬 شاهد فيلم: ${title}\n🍿 عبر بوت الأفلام والمسلسلات: @zxeeabot`;
+      const tgShareUrl = `https://t.me/share/url?url=${encodeURIComponent(shareUrl)}&text=${encodeURIComponent(shareText)}`;
+
+      if (tg?.openTelegramLink) {
+        tg.openTelegramLink(tgShareUrl);
+      } else {
+        window.open(tgShareUrl, '_blank');
+      }
+    }
+
+    // Action: Favorites
+    function toggleFavoriteFromModal() {
+      hapticTap('medium');
+      if (!state.currentModalMovie) return;
+      const id = state.currentModalMovie.id;
+      const idx = state.favorites.indexOf(id);
+
+      if (idx > -1) {
+        state.favorites.splice(idx, 1);
+      } else {
+        state.favorites.push(id);
+      }
+
+      localStorage.setItem('cinema_favorites', JSON.stringify(state.favorites));
+      updateModalFavButtonState(id);
+      updateFavBadge();
+
+      if (state.activeTab === 'favorites') {
+        renderFavoritesTab();
+      }
+    }
+
+    function updateModalFavButtonState(id) {
+      const isFav = state.favorites.includes(id);
+      const btn = document.getElementById('modalFavBtn');
+      const text = document.getElementById('modalFavBtnText');
+      if (!btn || !text) return;
+
+      if (isFav) {
+        btn.className = "flex-1 sm:flex-none flex items-center justify-center gap-1.5 rounded-2xl border border-rose-500/50 bg-rose-600/20 py-3.5 px-4 text-xs font-semibold text-rose-400 transition hover:bg-rose-600/30";
+        text.textContent = "في المفضلة ❤️";
+      } else {
+        btn.className = "flex-1 sm:flex-none flex items-center justify-center gap-1.5 rounded-2xl border border-white/10 bg-zinc-900 py-3.5 px-4 text-xs font-semibold text-zinc-300 transition hover:bg-zinc-800";
+        text.textContent = "المفضلة";
+      }
+    }
+
+    function updateFavBadge() {
+      const badge = document.getElementById('favCountBadge');
+      if (badge) {
+        if (state.favorites.length > 0) {
+          badge.textContent = state.favorites.length;
+          badge.classList.remove('hidden');
+          badge.classList.add('flex');
+        } else {
+          badge.classList.add('hidden');
+          badge.classList.remove('flex');
+        }
+      }
+    }
+
+    // 8. Bottom Navigation Tabs Switcher
+    function switchTab(tab) {
+      hapticTap();
+      state.activeTab = tab;
+
+      // Update Nav Buttons Styles
+      document.querySelectorAll('.nav-tab').forEach(b => {
+        b.className = "nav-tab flex flex-col items-center gap-1 text-zinc-400 transition hover:text-white";
+      });
+      const activeTabBtn = document.getElementById(`tab-${tab}`);
+      if (activeTabBtn) {
+        activeTabBtn.className = "nav-tab flex flex-col items-center gap-1 text-rose-500 transition font-bold";
+      }
+
+      const heroEl = document.getElementById('heroSection');
+      const searchMeta = document.getElementById('searchMetaBar');
+      const gridTitle = document.getElementById('gridSectionTitle');
+
+      if (tab === 'home') {
+        if (heroEl) heroEl.classList.remove('hidden');
+        if (searchMeta) searchMeta.classList.remove('hidden');
+        if (gridTitle) gridTitle.textContent = "أحدث وأقوى الأفلام";
+        setSortMode('featured');
+      } else if (tab === 'top') {
+        if (heroEl) heroEl.classList.add('hidden');
+        if (gridTitle) gridTitle.textContent = "الأفلام الأعلى تقييماً ⭐";
+        setSortMode('rating');
+      } else if (tab === 'favorites') {
+        if (heroEl) heroEl.classList.add('hidden');
+        if (gridTitle) gridTitle.textContent = "أفلامي المفضلة ❤️";
+        renderFavoritesTab();
+      } else if (tab === 'about') {
+        renderAboutTab();
+      }
+    }
+
+    function renderFavoritesTab() {
+      const grid = document.getElementById('moviesGrid');
+      const emptyState = document.getElementById('emptyState');
+      if (!grid) return;
+
+      const favMovies = state.movies.filter(m => state.favorites.includes(m.id));
+      if (favMovies.length === 0 && state.favorites.length === 0) {
+        grid.innerHTML = '';
+        if (emptyState) {
+          emptyState.innerHTML = `
+            <div class="flex h-16 w-16 items-center justify-center rounded-2xl bg-zinc-900 text-rose-500">
+              <i data-lucide="heart" class="h-8 w-8"></i>
+            </div>
+            <h3 class="mt-4 text-base font-bold text-white">قائمة المفضلة فارغة</h3>
+            <p class="mt-1 text-xs text-zinc-400">انقر على أيقونة القلب في أي فيلم لحفظه هنا للمشاهدة لاحقاً</p>
+          `;
+          emptyState.classList.remove('hidden');
+          lucide.createIcons();
+        }
+        return;
+      }
+
+      // Filter and render
+      state.movies = state.movies.filter(m => state.favorites.includes(m.id));
+      renderMoviesGrid();
+    }
+
+    function renderAboutTab() {
+      const grid = document.getElementById('moviesGrid');
+      if (!grid) return;
+
+      grid.className = "col-span-full max-w-2xl mx-auto";
+      grid.innerHTML = `
+        <div class="rounded-3xl border border-white/10 bg-brand-surface p-6 shadow-glow-card text-center">
+          <div class="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-tr from-rose-600 to-indigo-600 shadow-glow-red">
+            <i data-lucide="clapperboard" class="h-8 w-8 text-white"></i>
+          </div>
+          <h2 class="mt-4 font-readex text-xl font-extrabold text-white">سينما جيت | CinemaJet</h2>
+          <p class="mt-1 text-xs text-zinc-400">تطبيق التليجرام المصغر الأقوى لمشاهدة وتحميل أحدث الأفلام والمسلسلات بجودة عالية وسرعة فائقة.</p>
+
+          <div class="mt-6 grid grid-cols-2 gap-3 text-right">
+            <div class="rounded-2xl border border-white/5 bg-zinc-900/80 p-3.5">
+              <span class="text-xs text-zinc-500 font-medium">إجمالي الأفلام</span>
+              <p class="mt-1 font-readex text-lg font-bold text-rose-400">4,900+ فيلم</p>
+            </div>
+            <div class="rounded-2xl border border-white/5 bg-zinc-900/80 p-3.5">
+              <span class="text-xs text-zinc-500 font-medium">سيرفرات البث</span>
+              <p class="mt-1 font-readex text-lg font-bold text-emerald-400">فائقة السرعة ⚡</p>
+            </div>
+          </div>
+
+          <div class="mt-6 flex flex-col gap-2.5">
+            <button onclick="openTelegramBot()" class="flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-rose-600 to-indigo-600 py-3 font-readex text-xs font-bold text-white shadow-glow-red">
+              <i data-lucide="send" class="h-4 w-4"></i>
+              <span>الدخول للبوت الرئيسي @zxeeabot</span>
+            </button>
+
+            <a href="https://t.me/NitroJet3BOT" target="_blank" class="flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-zinc-900 py-3 font-readex text-xs font-semibold text-zinc-200 transition hover:bg-zinc-800">
+              <i data-lucide="shopping-bag" class="h-4 w-4 text-rose-400"></i>
+              <span>زيارة متجر البوت @NitroJet3BOT</span>
+            </a>
+          </div>
+        </div>
+      `;
+      lucide.createIcons();
+    }
+
+    function openTelegramBot() {
+      hapticTap();
+      const botUrl = "https://t.me/zxeeabot";
+      if (tg?.openTelegramLink) {
+        tg.openTelegramLink(botUrl);
+      } else {
+        window.open(botUrl, '_blank');
+      }
+    }
+  </script>
+</body>
+</html>

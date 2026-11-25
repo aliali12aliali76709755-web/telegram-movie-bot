@@ -290,13 +290,29 @@ async def start_handler(event):
     text = (
         "أهلاً بك في بوت الأفلام والمسلسلات 🎬🍿\n\n"
         "• أرسل اسم أي فيلم أو مسلسل، وسأجلبه لك فوراً للمشاهدة والتحميل!\n"
+        "• أو افتح **تطبيق سينما جيت المصغر** لتصفح مكتبة الأفلام مع البوسترات والتقييمات والقصة كاملة!\n"
         "• **لا تتذكر اسم الفيلم؟** اضغط على **(🧠 باحث المشاهد)** واشرح ما تتذكره وسيتعرف عليه الذكاء الاصطناعي فوراً!"
     )
     buttons = [
+        [Button.url("🚀 فتح تطبيق الأفلام المصغر 🎬", url="https://telegram-movie-bot-jno5.onrender.com/app")],
         [
             Button.inline("🧠 باحث المشاهد بالذكاء الاصطناعي", data="ai_user_start"),
             Button.inline("✨ اقترح لي أفلام", data="ai_user_suggest")
         ]
+    ]
+    await event.reply(text, buttons=buttons)
+
+@bot.on(events.NewMessage(pattern=r'^\s*[\u200e\u200f]?/(?:app|webapp|cinema|تطبيق)', func=lambda e: e.is_private))
+async def miniapp_cmd_handler(event):
+    text = (
+        "🍿 **تطبيق سينما جيت المصغر (CinemaJet Mini App)** 🎬\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n"
+        "✨ تصفح أكثر من 4,900 فيلم سينمائي مع صور الغلاف الرسمية، التقييمات، والقصة الكاملة بجودة فائقة وبشكل تفاعلي مميز!\n\n"
+        "👇 **اضغط على الزر أدناه لفتح التطبيق المصغر داخل تليجرام فوراً:**"
+    )
+    buttons = [
+        [Button.url("🚀 فتح تطبيق سينما جيت 🎬", url="https://telegram-movie-bot-jno5.onrender.com/app")],
+        [Button.url("🛍️ زيارة متجر البوت", url="https://t.me/NitroJet3BOT")]
     ]
     await event.reply(text, buttons=buttons)
 
@@ -1184,6 +1200,7 @@ async def main(state_dict: dict = None):
                 cmd_data = {
                     'commands': [
                         {'command': 'start', 'description': 'بدء تشغيل البوت والبحث 🎬'},
+                        {'command': 'app', 'description': 'تطبيق الأفلام المصغر 📱'},
                         {'command': 'ai', 'description': 'باحث المشاهد بالذكاء الاصطناعي 🧠'},
                         {'command': 'support', 'description': 'الدعم الفني والمساعدة 👨‍💻'}
                     ]
@@ -1202,7 +1219,15 @@ async def main(state_dict: dict = None):
 
             req_menu = urllib.request.Request(
                 f"https://api.telegram.org/bot{BOT_TOKEN}/setChatMenuButton",
-                data=json.dumps({'menu_button': {'type': 'commands'}}).encode('utf-8'),
+                data=json.dumps({
+                    'menu_button': {
+                        'type': 'web_app',
+                        'text': '🎬 سينما جيت',
+                        'web_app': {
+                            'url': 'https://telegram-movie-bot-jno5.onrender.com/app'
+                        }
+                    }
+                }).encode('utf-8'),
                 headers={'Content-Type': 'application/json'}
             )
             try:
