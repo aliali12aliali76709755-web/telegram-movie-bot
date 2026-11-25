@@ -608,6 +608,7 @@ class HealthHandler(BaseHTTPRequestHandler):
                 "bot_id": BOT_RUNTIME_STATE["id"],
                 "bot_started_at": BOT_RUNTIME_STATE["started_at"],
                 "last_heartbeat": BOT_RUNTIME_STATE["last_heartbeat"],
+                "last_error": BOT_RUNTIME_STATE.get("last_error"),
                 "mongodb": db_status,
                 "stats": stats
             }

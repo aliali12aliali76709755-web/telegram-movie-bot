@@ -16,7 +16,7 @@ if hasattr(sys.stderr, 'reconfigure'):
         pass
 import cryptg
 from telethon import TelegramClient, events, Button, types, errors
-from telethon.sessions import MemorySession
+from telethon.sessions import MemorySession, StringSession
 from telethon.tl.types import DocumentAttributeVideo
 from database import (
     get_media_item_by_id, search_media, get_stats, 
@@ -179,7 +179,29 @@ try:
 except Exception as _patch_err:
     print(f"⚠️ Telethon patch notice: {_patch_err}", flush=True)
 
-bot = TelegramClient(MemorySession(), API_ID, API_HASH, connection_retries=None, retry_delay=3)
+def _load_bot_session_str():
+    try:
+        sess_file = os.path.join(os.path.dirname(__file__), 'bot_session_str.txt')
+        if os.path.exists(sess_file):
+            with open(sess_file, 'r', encoding='utf-8') as f:
+                s = f.read().strip()
+                if s:
+                    return s
+    except Exception:
+        pass
+    try:
+        from database import get_mongo_db
+        mdb = get_mongo_db()
+        if mdb is not None:
+            doc = mdb['bot_config'].find_one({'_id': 'bot_session'})
+            if doc and doc.get('session_str'):
+                return doc['session_str']
+    except Exception:
+        pass
+    return ""
+
+BOT_SESSION_STR = _load_bot_session_str()
+bot = TelegramClient(StringSession(BOT_SESSION_STR), API_ID, API_HASH, connection_retries=None, retry_delay=3)
 
 async def safe_answer(event, *args, **kwargs):
     """Safely answers a callback query without raising QueryIdInvalidError if expired."""
@@ -1302,6 +1324,25 @@ async def main(state_dict: dict = None):
             await bot.start(bot_token=BOT_TOKEN)
             me = await bot.get_me()
             print(f"Bot @{me.username} ({me.first_name}) is LIVE and LISTENING for messages!", flush=True)
+
+            # Persist authorized StringSession so future restarts never trigger FloodWait
+            if hasattr(bot.session, 'save'):
+                try:
+                    s_str = bot.session.save()
+                    if s_str:
+                        from database import get_mongo_db
+                        mdb = get_mongo_db()
+                        if mdb is not None:
+                            mdb['bot_config'].update_one(
+                                {'_id': 'bot_session'},
+                                {'$set': {'session_str': s_str, 'updated_at': time.time()}},
+                                upsert=True
+                            )
+                        sess_file = os.path.join(os.path.dirname(__file__), 'bot_session_str.txt')
+                        with open(sess_file, 'w', encoding='utf-8') as f:
+                            f.write(s_str)
+                except Exception as save_err:
+                    print(f"Notice saving persistent session: {save_err}")
 
             if state_dict is not None:
                 state_dict["connected"] = True
