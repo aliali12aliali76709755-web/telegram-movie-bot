@@ -952,7 +952,8 @@ def format_movie_for_api(row: dict) -> dict:
         "duration_str": dur_str,
         "is_series": row.get('is_series', 0),
         "series_title": row.get('series_title'),
-        "is_transferred": row.get('is_transferred', 0)
+        "is_transferred": row.get('is_transferred', 0),
+        "target_msg_id": row.get('target_msg_id')
     }
 
 def get_miniapp_movies(page: int = 1, limit: int = 24, query: str = None, 
@@ -1006,6 +1007,7 @@ def get_miniapp_movies(page: int = 1, limit: int = 24, query: str = None,
 
             return {
                 "items": items,
+                "movies": items,
                 "total": total,
                 "page": page,
                 "limit": limit,
@@ -1155,6 +1157,7 @@ def get_miniapp_series(page: int = 1, limit: int = 24, query: str = None) -> dic
     total_pages = max(1, (total + limit - 1) // limit) if total > 0 else 1
     return {
         "items": items,
+        "series": items,
         "total": total,
         "page": page,
         "limit": limit,
@@ -1247,7 +1250,7 @@ def get_movie_by_id(item_id: int):
         cursor.execute("""
         SELECT id, title, clean_title, arabic_title, poster_url, backdrop_url, 
                description, release_year, rating, genres, quality, file_size, duration,
-               is_series, series_title, season_num, episode_num, is_transferred
+               is_series, series_title, season_num, episode_num, is_transferred, target_msg_id
         FROM media_items WHERE id = ?
         """, (item_id,))
         row = cursor.fetchone()

@@ -78,6 +78,15 @@ class HealthHandler(BaseHTTPRequestHandler):
                 import database
                 from bot import bot as telethon_bot, MOVIES_CHANNEL, SERIES_CHANNEL
                 item = database.get_movie_by_id(item_id)
+                if not item or not item.get('target_msg_id'):
+                    mdb = database.get_mongo_db()
+                    if mdb:
+                        doc = mdb['media_items'].find_one({'id': item_id})
+                        if doc and doc.get('target_msg_id'):
+                            if not item:
+                                item = database.format_movie_for_api(doc)
+                            item['target_msg_id'] = doc.get('target_msg_id')
+                            item['is_series'] = doc.get('is_series', 0)
                 if item and item.get('target_msg_id') and BOT_ASYNC_LOOP and telethon_bot:
                     target_msg_id = item['target_msg_id']
                     channel = MOVIES_CHANNEL if item.get('is_series') == 0 else SERIES_CHANNEL
@@ -110,6 +119,16 @@ class HealthHandler(BaseHTTPRequestHandler):
         from bot import bot as telethon_bot, MOVIES_CHANNEL, SERIES_CHANNEL
 
         item = database.get_movie_by_id(item_id)
+        if not item or not item.get('target_msg_id'):
+            mdb = database.get_mongo_db()
+            if mdb:
+                doc = mdb['media_items'].find_one({'id': item_id})
+                if doc and doc.get('target_msg_id'):
+                    if not item:
+                        item = database.format_movie_for_api(doc)
+                    item['target_msg_id'] = doc.get('target_msg_id')
+                    item['is_series'] = doc.get('is_series', 0)
+
         if not item or not item.get('target_msg_id'):
             self.send_response(404)
             self.send_header('Content-Type', 'application/json')
