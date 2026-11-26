@@ -353,10 +353,7 @@ async def start_handler(event):
         "• **لا تتذكر اسم الفيلم؟** اضغط على **(🧠 باحث المشاهد)** واشرح ما تتذكره وسيتعرف عليه الذكاء الاصطناعي فوراً!"
     )
     buttons = [
-        [types.KeyboardInlineButton(
-            text="🚀 فتح تطبيق الأفلام المصغر 🎬",
-            type=types.InlineButtonTypeWebView(url="https://telegram-movie-bot-jno5.onrender.com/app")
-        )],
+        [Button.url("🚀 فتح تطبيق الأفلام المصغر 🎬", url="https://telegram-movie-bot-jno5.onrender.com/app")],
         [
             Button.inline("🧠 باحث المشاهد بالذكاء الاصطناعي", data="ai_user_start"),
             Button.inline("✨ اقترح لي أفلام", data="ai_user_suggest")
@@ -373,10 +370,7 @@ async def miniapp_cmd_handler(event):
         "👇 **اضغط على الزر أدناه لفتح التطبيق المصغر داخل تليجرام فوراً:**"
     )
     buttons = [
-        [types.KeyboardInlineButton(
-            text="🚀 فتح تطبيق سينما جيت 🎬",
-            type=types.InlineButtonTypeWebView(url="https://telegram-movie-bot-jno5.onrender.com/app")
-        )],
+        [Button.url("🚀 فتح تطبيق سينما جيت 🎬", url="https://telegram-movie-bot-jno5.onrender.com/app")],
         [Button.url("🛍️ زيارة متجر البوت", url="https://t.me/NitroJet3BOT")]
     ]
     await event.reply(text, buttons=buttons)
